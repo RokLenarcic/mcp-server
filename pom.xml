@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>org.clojars.roklenarcic</groupId>
+    <artifactId>mcp-server</artifactId>
+    <packaging>jar</packaging>
+    <version>0.1.0</version>
+    <name>mcp-server</name>
+    <description>A Clojure library for Model Context Protocol Servers</description>
+    <url>https://github.com/RokLenarcic/mcp-server</url>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://github.com/RokLenarcic/mcp-server/blob/main/LICENSE</url>
+        </license>
+    </licenses>
+    <scm>
+        <url>https://github.com/RokLenarcic/mcp-server</url>
+        <connection>scm:git:git://github.com/RokLenarcic/mcp-server.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/RokLenarcic/mcp-server.git</developerConnection>
+    </scm>
+    <dependencies>
+    </dependencies>
+    <build>
+        <sourceDirectory>src</sourceDirectory>
+    </build>
+</project>
