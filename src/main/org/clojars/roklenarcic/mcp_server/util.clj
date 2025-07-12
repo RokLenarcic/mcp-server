@@ -1,15 +1,9 @@
 (ns org.clojars.roklenarcic.mcp-server.util
+  "This namespace provides utility functions used throughout the MCP server
+   implementation. It includes helper functions for functional programming,
+   map manipulation, async operations, and naming conventions."
   (:require [clojure.walk :refer [walk postwalk]])
   (:import (java.util.concurrent CompletableFuture)))
-
-(defn ?!
-  "Run if the argument is a fn. This function can accept a value or function. If it is a
-  function then it will apply the remaining arguments to it; otherwise it will just return
-  `v`."
-  [v & args]
-  (if (fn? v)
-    (apply v args)
-    v))
 
 (defn- ->sym
   "Extract a symbol from the form.
@@ -72,7 +66,22 @@
              (catch ClassNotFoundException _
                false))))))
 
-(defn camelCaseKey [k]
+(defn camelCaseKey
+  "Converts a kebab-case keyword to camelCase keyword.
+   
+   This function converts Clojure-style kebab-case keywords to JavaScript-style
+   camelCase keywords, which is useful for JSON serialization.
+   
+   Parameters:
+   - k: keyword to convert
+   
+   Returns a camelCase keyword.
+   
+   Examples:
+   (camelCaseKey :hello-world) => :helloWorld
+   (camelCaseKey :some-long-name) => :someLongName
+   (camelCaseKey :simple) => :simple"
+  [k]
   (let [sb (StringBuilder.)]
     (loop [[c & more] (name k)
            upper-next false]
@@ -83,7 +92,20 @@
         (keyword (.toString sb))))))
 
 (defn camelcase-keys
-  "Recursively transforms all map keys to camel case."
+  "Recursively transforms all map keys from kebab-case to camelCase.
+   
+   This function walks through nested data structures and converts all map keys
+   from Clojure-style kebab-case to JavaScript-style camelCase. This is useful
+   when preparing data for JSON serialization.
+   
+   Parameters:
+   - m: data structure to transform
+   
+   Returns the data structure with all map keys converted to camelCase.
+   
+   Examples:
+   (camelcase-keys {:hello-world 1 :nested-map {:some-key 2}})
+   => {:helloWorld 1 :nestedMap {:someKey 2}}"
   {:added "1.1"}
   [m]
   (let [f (fn [[k v]] [(camelCaseKey k) v])]

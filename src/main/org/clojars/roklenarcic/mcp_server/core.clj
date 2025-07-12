@@ -1,4 +1,7 @@
 (ns org.clojars.roklenarcic.mcp-server.core
+  "This namespace provides the core API for building MCP (Model Context Protocol) servers.
+  It includes protocol definitions, helper functions for creating various MCP objects,
+  and the main abstractions for request handling."
   (:require [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.json-rpc.parse :as rpc]
@@ -6,17 +9,27 @@
   (:import (java.io InputStream)))
 
 (defprotocol RequestExchange
-  "An Exchange scoped to the request."
-  (client-spec [this] "Data about client capabilities.")
-  (get-session [this] "Returns session data atom")
+  "An Exchange scoped to the request - the main interface for MCP handlers."
+  (client-spec [this] 
+    "Returns data about client capabilities and information.
+     Returns a map with :info and :capabilities keys.")
+  (get-session [this] "Returns the session data atom.")
   (log-msg [this level logger msg data]
-    "Logs to client, level is one of
-    :debug, :info, :notice, :warning, :error, :critical, :alert, :emergency,
-
-    - logger is a string")
-  (list-roots [this] "List of roots from the client, returns CompletableFuture.")
+    "Logs a message to the client if logging is enabled.
+     
+     Parameters:
+     - level: one of :debug, :info, :notice, :warning, :error, :critical, :alert, :emergency
+     - logger: string identifying the logger
+     - msg: log message string
+     - data: optional additional data to include")
+  (list-roots [this] 
+    "Lists the client's root directories/URIs.
+     Returns a CompletableFuture containing a vector of root objects.")
   (sampling [this sampling-request]
-    "Request a sampling, returns CompletableFuture or nil if client doesn't support sampling."))
+    "Requests the client to perform LLM sampling/completion.
+     Returns CompletableFuture with result, or nil if client doesn't support sampling.
+     
+     sampling-request should be created with the sampling-request function."))
 
 (extend-protocol p/ResourceResponse
   String
@@ -36,33 +49,52 @@
 (defrecord JSONRPCError [code message data])
 
 (defn invalid-request
-  "Create an invalid request error response"
+  "Create an invalid request error response.
+   
+   Parameters:
+   - data: optional error data
+   - message: optional custom error message (defaults to 'Invalid Request')"
   ([data] (invalid-request data "Invalid Request"))
   ([data message]
    (->JSONRPCError rpc/INVALID_REQUEST message data)))
 
 (defn invalid-params
-  "Create an invalid params error response"
+  "Create an invalid params error response.
+   
+   Parameters:
+   - data: optional error data
+   - message: optional custom error message (defaults to 'Invalid Params')"
   ([data] (invalid-params data "Invalid Params"))
   ([data message]
    (->JSONRPCError rpc/INVALID_PARAMS message data)))
 
 (defn internal-error
-  "Create an invalid request error response"
+  "Create an internal error response.
+   
+   Parameters:
+   - data: optional error data
+   - message: error message describing the internal error"
   [data message]
   (->JSONRPCError rpc/INTERNAL_ERROR message data))
 
 (defn resource-not-found
-  "Creates a resource not found error message"
+  "Creates a resource not found error message.
+   
+   Parameters:
+   - uri: the URI of the resource that was not found"
   [uri]
   (->JSONRPCError rpc/RESOURCE_NOT_FOUND "Resource Not Found" uri))
 
 (defn resource
-  "Create a resource content for Get Resource response. If URI is not specified, the
-  request URI will be used.
-
-  If body is a String, a text resource will be generated, but if byte array or
-  InputStream, then a Blob resource is created."
+  "Create a resource content for Get Resource response.
+   
+   Parameters:
+   - body: the resource content (String, byte array, or InputStream)
+   - mime-type: MIME type of the resource (optional, will be inferred if nil)
+   - uri: URI of the resource (optional, request URI will be used if nil)
+   
+   If body is a String, a text resource will be generated.
+   If body is a byte array or InputStream, a binary resource is created."
   [body mime-type uri]
   (reify p/ResourceResponse
     (-res-body [this] (p/-res-body body))
@@ -70,15 +102,25 @@
     (-res-uri [this] uri)))
 
 (defn resource-desc
-  "Create a resource description for List Resources operation."
+  "Create a resource description for List Resources operation.
+   
+   Parameters:
+   - uri: URI of the resource
+   - name: human-readable name of the resource
+   - description: description of the resource
+   - mime-type: MIME type of the resource
+   - annotations: optional metadata annotations"
   [uri name description mime-type annotations]
   (map-of uri name description mime-type annotations))
 
 (defn audio-content
-  "Audio Content for Tools and Prompts.
-
-  Data can be byte array or input stream, priority is a double,
-  audience is vector of :user, :assistant"
+  "Create audio content for Tools and Prompts.
+   
+   Parameters:
+   - data: audio data (byte array or InputStream)
+   - mime-type: MIME type of the audio (e.g., 'audio/wav', 'audio/mp3')
+   - priority: optional priority value (double)
+   - audience: optional audience vector (:user, :assistant, or both)"
   ([data mime-type]
    (audio-content data mime-type nil nil))
   ([data mime-type priority audience]
@@ -91,10 +133,13 @@
      (-aud-data [this] data))))
 
 (defn image-content
-  "Image Content for Tools and Prompts.
-
-  Data can be byte array or input stream, priority is a double,
-  audience is vector of :user, :assistant"
+  "Create image content for Tools and Prompts.
+   
+   Parameters:
+   - data: image data (byte array or InputStream)
+   - mime-type: MIME type of the image (e.g., 'image/png', 'image/jpeg')
+   - priority: optional priority value (double)
+   - audience: optional audience vector (:user, :assistant, or both)"
   ([data mime-type]
    (image-content data mime-type nil nil))
   ([data mime-type priority audience]
@@ -107,10 +152,12 @@
      (-con-data [this] data))))
 
 (defn embedded-content
-  "Embedded Resource Content for Tools and Prompts.
-
-  resource is ResourceResponse protocol object (String, byte[]
-  priority is a double, audience is vector of :user, :assistant"
+  "Create embedded resource content for Tools and Prompts.
+   
+   Parameters:
+   - resource: ResourceResponse protocol object (String, byte[], or InputStream)
+   - priority: optional priority value (double)
+   - audience: optional audience vector (:user, :assistant, or both)"
   ([resource] (embedded-content resource nil nil))
   ([resource priority audience]
    (reify
@@ -123,10 +170,12 @@
      (-res-uri [this] (p/-res-uri resource)))))
 
 (defn text-content
-  "Embedded Resource Content for Tools and Prompts.
-
-  resource if created by resource function in this namespace,
-  priority is a double, audience is vector of :user, :assistant"
+  "Create text content for Tools and Prompts.
+   
+   Parameters:
+   - text: the text content (string)
+   - priority: optional priority value (double)
+   - audience: optional audience vector (:user, :assistant, or both)"
   ([text] (text-content text nil nil))
   ([text priority audience]
    (reify
@@ -137,30 +186,38 @@
      (-con-text [this] text))))
 
 (defn message
-  "Message, role is one of :user, :assistant, content is one of image-content, embedded-content or text-content."
+  "Create a message with role and content.
+   
+   Parameters:
+   - role: message role (:user or :assistant)
+   - content: message content (image-content, embedded-content, or text-content)"
   [role content]
   (reify p/Message
     (-msg-role [this] role)
     (-msg-content [this] content)))
 
 (defn prompt-resp
-  "Prompt response: a description and one or more prompt messages. Single messages are automatically
-  wrapped into a vector.
-
-  A message is core/Message, or just a core/Content object (which becomes a Message with nil role)."
+  "Create a prompt response with description and messages.
+   
+   Parameters:
+   - description: description of the prompt response
+   - messages: one or more prompt messages (single messages are automatically wrapped into a vector)
+   
+   A message can be a core/Message, or just a core/Content object (which becomes a Message with nil role)."
   [description messages]
   (reify p/PromptResponse
     (-prompt-desc [this] description)
     (-prompt-msgs [this] messages)))
 
 (defn completion-resp
-  "Completion response. Protocol limits responses to 100 items.
-
-  - values is a coll of strings
-  - total is integer of number of all items, optional
-  - has-more? is a boolean indicating if there's more than 100 items
-
-  1-arg arity assumes that the values items is all there is"
+  "Create a completion response. Protocol limits responses to 100 items.
+   
+   Parameters:
+   - values: collection of completion strings
+   - total: integer of total number of all items (optional)
+   - has-more?: boolean indicating if there are more than 100 items
+   
+   1-arg arity assumes that the values collection contains all available items."
   ([values] (completion-resp values (count values) (< 100 (count values))))
   ([values total] (completion-resp values total (when total (< 100 total))))
   ([values total has-more?]
@@ -169,22 +226,31 @@
     :hasMore has-more?}))
 
 (defn tool-error
-  "Tool error response. The content is one content object or a collection of them."
+  "Create a tool error response.
+   
+   Parameters:
+   - content: one content object or a collection of them describing the error"
   [content]
   (reify p/ToolErrorResponse
     (-err-contents [this] content)))
 
 (defn model-preferences
-  "Model preferences for a sampling request. hints is a vector of {:name: \"claude-3-sonnet\"}"
+  "Create model preferences for a sampling request.
+   
+   Parameters:
+   - hints: vector of model hints (e.g., [{:name \"claude-3-sonnet\"}])
+   - intelligence-priority: priority for intelligence vs speed (double)
+   - speed-priority: priority for speed vs intelligence (double)"
   [hints intelligence-priority speed-priority]
   (map-of hints intelligence-priority speed-priority))
 
 (defn sampling-request
-  "Create a sampling request.
-
-  - messages is one or more core/Message objects or core/Content objects.
-  - model-preferences is a map (see model-preferences function)
-  - system-prompt is a string
-  - max-tokens is a number"
+  "Create a sampling request for LLM completion.
+   
+   Parameters:
+   - messages: one or more core/Message objects or core/Content objects
+   - model-preferences: map created by model-preferences function
+   - system-prompt: string containing the system prompt
+   - max-tokens: maximum number of tokens to generate"
   [messages model-preferences system-prompt max-tokens]
   (map-of messages model-preferences system-prompt max-tokens))

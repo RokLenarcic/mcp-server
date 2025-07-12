@@ -31,5 +31,5 @@
                     ;; add a tool to that
                     (server/add-tool tool))]
     (run-jetty
-      (http/ring-handler session {:endpoint "http://localhost:5556/sse"})
+      (http/ring-handler session (http/memory-sessions-store) {:endpoint "http://localhost:5556/sse"})
       {:port 5556 })))

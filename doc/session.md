@@ -17,6 +17,19 @@ If you wish to have tool available for everyone, add it to primordial session be
 
 This flexibility allows that you actually have different tools, prompts, etc... for one particular client, if you so wish.
 
+### Dependencies
+
+Best way to add your dependencies is when you create the primordial session.
+
+```clojure
+(server/make-session server-info
+                     (json/serde {})
+                     ;; add your stuff
+                     {:db-pool db-pool
+                      :email-sender email-sender
+                      :duct-system system})
+```
+
 ## Stream transport
 
 Stream transport uses only 1 session per instance.

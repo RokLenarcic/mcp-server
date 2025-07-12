@@ -97,7 +97,7 @@
                         :clientInfo {:name "Test Client" :version "1.0.0"}})
     ;; Read initialize response
     (is (match? {"error" {"code" -32600
-                          "data" "Invalid protocol version 2024-11-06, supported version #{\"2025-03-26\" \"2024-11-05\"}"
+                          "data" "Invalid protocol version 2024-11-06, supported version #{\"2025-03-26\" \"2025-06-18\" \"2024-11-05\"}"
                           "message" "Invalid Request"}
                  "id" int?
                  "jsonrpc" "2.0"}
