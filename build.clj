@@ -36,6 +36,7 @@
       (test opts)
       (-> (create-opts opts [])
           (clean)
+          (doto (b/write-pom))
           (b/jar)))
 
 (defn install "Install the JAR locally." [opts]
@@ -46,4 +47,5 @@
       (let [{:keys [jar-file]} (create-opts opts [])]
            (deps-deploy/deploy {:installer :remote
                                 :sign-releases? true
+                                :pom-file (b/pom-path {:lib lib :class-dir (str (:target opts "target") "/classes")})
                                 :artifact jar-file})))

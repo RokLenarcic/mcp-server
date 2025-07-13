@@ -1,58 +1,55 @@
 # MCP Server
 
-This is a library for making MCP Servers. It prioritizes being
-implementation agnostic and without dependencies.
+A lightweight Clojure library for building MCP (Model Context Protocol) servers. This library prioritizes flexibility and minimal dependencies, allowing you to integrate with your existing technology stack.
 
-The library is in alpha stage and features will be added
-incrementally.
+The library is currently in alpha stage with features being added incrementally.
 
-## Why?
+[![Clojars Project](https://img.shields.io/clojars/v/org.clojars.roklenarcic/mcp-server.svg)](https://clojars.org/org.clojars.roklenarcic/mcp-server)
 
-There's already some existing software packages in this space. Most of them
-are very opinionated, and they will force a JSON parser, a server, a logger and
-a sync/async method on you, and you might have a pre-existing choices for those.
+## Why Use This Library?
 
-This library does none of that, at a price of requiring slightly more assembly for the advanced cases.
+Existing MCP server implementations often force specific technology choices on you - they bundle JSON parsers, web servers, loggers, and synchronous/asynchronous patterns. This library takes a different approach by letting you choose your own components.
 
 <details>
-<summary>Here is why I decided to make my own</summary>
+<summary>Why I Built This Instead of Using Existing Solutions</summary>
 
-My first approach was to wrap the official Java MCP server at https://github.com/modelcontextprotocol/java-sdk
+I initially tried wrapping the official Java MCP server from https://github.com/modelcontextprotocol/java-sdk, but encountered several issues:
 
-It was very complex wrapping job and when I tried to run that it had many problems:
+- **Heavy dependencies**: Jackson, Reactor, and other large libraries
+- **Java version requirements**: Uses Java records (Java 14 Preview/Java 16 standard)
+- **Integration problems**: Couldn't get Jackson working properly with records
+- **Forced logging**: Uses SLF4J with no alternative options
+- **Complex async patterns**: Uses Reactive streams, which are difficult to debug
+- **Always async**: Even "sync" servers use async internally
+- **Framework assumptions**: Designed for Spring integration, not useful in Clojure
 
-- fat dependencies such as Jackson, and Reactor
-- it uses java records which are Java 14 Preview Feature and Java 16 standard feature, not a big deal, but there's always someone who still uses older Java versions
-- couldn't get Jackson to work with these records, there were issues getting it to run
-- uses SLJ4J, you might want to use something else
-- uses Reactive pattern for handling, it is a nightmare to debug, I hate it
-- even if you start a Sync server it uses Async in the back so you're back to Reactive
-- easy Spring integration is not a perk in Clojure space
+The complexity didn't match the value. If you want to build a simple STDIO MCP server with basic tools, why should you need to bundle a web server and deal with reactive flows?
 
-It was just a big ball of complexity for no discernible gain. Some person might want to just
-play with a simple Stdio MCP Server that has a trivial tool, why should they have to 
-bundle a webserver and work with async flows?
 </details>
 
-## What does Alpha mean?
+## Current Alpha Limitations
 
-- pagination is not implemented yet
-- API is not completely stable yet
-- Authentication is not implemented
-- Cancellation is not implemented
-- Progress is not implemented
-- Enforcing tool parameter schemas
-- No support for protocol 2025-06-18
+These features are not yet implemented:
+
+- Pagination support
+- Authentication
+- Request cancellation
+- Progress reporting
+- Tool parameter schema validation
+- Protocol version 2025-06-18 support
+
+The API may change before the stable release.
 
 ## Quick Start
 
-You'll have to choose a JSON serializer and provide the corresponding dependency. In this example we'll be using Charred.
-
-Add to deps.edn:
+First, choose a JSON serializer and add it to your dependencies. This example uses Charred:
 
 ```clojure
+;; Add to deps.edn
 com.cnuernber/charred {:mvn/version "1.037"}
 ```
+
+Here's a complete weather service example:
 
 ```clojure
 (ns example.weather
@@ -79,7 +76,7 @@ com.cnuernber/charred {:mvn/version "1.037"}
             get-weather))
 
 (defn start []
-  ;; create primordial session
+  ;; Create template session
   (let [session (-> (server/make-session
                       ;; plug in some general server config
                       server-info
@@ -89,19 +86,19 @@ com.cnuernber/charred {:mvn/version "1.037"}
                       {})
                     ;; add a tool to that
                     (server/add-tool tool))]
-    ;; start a STDIO server
+    ;; Start STDIO server
     (server/start-server-on-streams session System/in System/out {})))
 ```
 
-This is a mock weather service that works over STDIO transport. The key ingredients are in `org.clojars.roklenarcic.mcp-server.server` namespace.
+This creates a mock weather service that communicates over STDIO. The key components are:
 
-We have:
-- picked a JSON serialization implementation (Charred)
-- created a primordial session and added the tool to it
-- started a streams based transport with that session on on `stdin` and `stdout` streams.
+- **JSON serialization**: We chose Charred for JSON handling
+- **Session creation**: Created a session and added our tool
+- **Transport**: Started a stream-based server on stdin/stdout
 
-The session is just map, and the functions in `server` namespace assist with making the configuration maps, but they are not
-strictly needed. This is an equivalent server:
+## Alternative: Manual Configuration
+
+Since sessions are just maps, you can build them manually instead of using the helper functions:
 
 ```clojure
 (ns example.weather2
@@ -116,7 +113,6 @@ strictly needed. This is an equivalent server:
           (- 20 (rand-int 60))))
 
 (defn start []
-  ;; create primordial session
   (let [session-map {::mcp/server-info {:name "Weather Service"
                                         :version "1.0.0"
                                         :instructions "This service provides various weather data"}
@@ -124,19 +120,20 @@ strictly needed. This is an equivalent server:
                      ::mcp/dispatch-table (server/make-dispatch)
                      ::mcp/handlers
                      {:tools
-                      {"get_current_weather" {:name
-                                              :description "Reports current weather based on the location"
-                                              :input-schema {:properties {:location {:type "string", :description "Location of interest"}}
-                                                             :required ["location"]
-                                                             :type "object"}
-                                              :handler get-weather}}}}]
-    ;; start a STDIO server
+                      {"get_current_weather" 
+                       {:name "get_current_weather"
+                        :description "Reports current weather based on the location"
+                        :input-schema {:properties {:location {:type "string" 
+                                                              :description "Location of interest"}}
+                                       :required ["location"]
+                                       :type "object"}
+                        :handler get-weather}}}}]
     (server/start-server-on-streams (atom session-map) System/in System/out {})))
 ```
 
-Dispatch is also just a lookup map of handlers for JSON RPC calls.
+The dispatch table is a lookup map that routes JSON-RPC calls to their handlers.
 
-### Namespaces
+## Key Namespaces
 
 ```clojure
 [org.clojars.roklenarcic.mcp-server.server :as server]
@@ -144,61 +141,58 @@ Dispatch is also just a lookup map of handlers for JSON RPC calls.
 [org.clojars.roklenarcic.mcp-server :as-alias mcp]
 ```
 
-## Session
+## Session Management
 
-The central abstraction is Session. The session is a map in an atom, and it roughly represents a connection to a client:
+The session is the central abstraction - it's a map stored in an atom that represents a client connection. Sessions allow you to:
 
-- you can add things to the session and that's available to handlers (e.g. DB connection pools, Auth data)
-- you can modify/wrap internals (e.g. changing RPC handlers)
-- you can modify tool/prompt/resource lists
+- Store connection-specific data (database pools, authentication info)
+- Modify internal behavior (change RPC handlers)
+- Manage available tools, prompts, and resources
 
-See [Session cookbook](doc/session.md) for explanation (**very important read**).
+See the [Session Guide](doc/session.md) for detailed information (**essential reading**).
 
-## Execution model
+## Execution Models
 
-This library tries to let you choose your own model. **Your handlers can return values or CompletableFuture instances.**
+This library supports both synchronous and asynchronous execution patterns. **Your handlers can return plain values or CompletableFuture instances.**
 
-The default is that your handlers are called synchronously. 
+By default, handlers run synchronously. Functions that send requests to clients return `CompletableFuture` objects (or `nil` if the operation isn't supported).
 
-Functions that send requests to the Client return `CompletableFuture` or `nil` (if operation is not possible, e.g. unsupported by the client).
+See the [Sync/Async Guide](doc/async.md) for different approaches.
 
-See [Sync/async cookbook](doc/async.md) for approaches.
+## Handler Functions
 
-## Handlers
+Most handlers receive an `exchange` parameter first. This is a `RequestExchange` object that contains the session and provides access to client communication functions.
 
-Handlers of various types usually receive `exchange` as the first parameter. That is `org.clojars.roklenarcic.mcp-server.core/RequestExchange`
-object. With `core/get-session` you can extract session from an `exchange` while functions like `log-msg`, `list-roots` and `sampling` send
-requests to the client, returning CompletableFuture or nil.
+Use `core/get-session` to extract the session from an exchange. Functions like `log-msg`, `list-roots`, and `sampling` send requests to the client and return CompletableFuture objects.
 
-Outside of handlers you can create an `exchange` from a session with `server/exchange`.
+Outside of handlers, create an exchange from a session using `server/exchange`.
 
-### Errors
+## Error Handling
 
-Any of your handlers can return RPC error objects, which will be relayed to clients. Use
-function in the `core` namespace:
+Your handlers can return RPC error objects that will be sent to clients. Use the functions in the `core` namespace:
 
 ```clojure
-;; preferred error for wrong inputs
+;; For invalid input parameters
 (core/invalid-params "Size should be one of S, M, L, XL")
 
-;; A problem with the server
-(core/internal-error "DB is gone")
+;; For server-side problems
+(core/internal-error "Database connection failed")
 
-;; Specific for resources
-(core/resource-not-found "Cannot find url")
+;; For missing resources
+(core/resource-not-found "Cannot find URL")
 
-;; generally reserved for JSON RPC structural errors
-(core/invalid-request "I don't understand")
+;; For malformed requests (rarely used)
+(core/invalid-request "Request format not understood")
 
-(core/->JSONRPCError -32123 "Application specific error" "explanation")
+;; For custom application errors
+(core/->JSONRPCError -32123 "Application specific error" "Additional details")
 ```
 
 ## Tools
 
-Tools can be added/removed from primordial and live sessions. Notifications will be automatically sent to live session's clients, when tool list is modified.
+Tools can be added or removed from both template sessions and live sessions. When you modify a live session's tool list, the client automatically receives a notification.
 
 ```clojure
-
 (defn get-weather [exchange arguments] ...)
 
 (def tool (server/tool
@@ -209,26 +203,31 @@ Tools can be added/removed from primordial and live sessions. Notifications will
                                ["location"])
             get-weather))
 
-;; both modify the map and return the atom, you can ignore the return value if you wish
+;; Add or remove tools (returns the session atom)
 (server/add-tool session tool)
 (server/remove-tool session "get_current_weather")
-;; client is notified of the tool list change
+;; Client is automatically notified of changes
 ```
 
-The params schema is standard JSON Schema, it can be nested, `server` namespace has some functions to assist you:
+### Tool Schemas
+
+Parameter schemas use standard JSON Schema format. The `server` namespace provides helper functions for common patterns:
 
 ```clojure
 (server/obj-schema nil 
                    {:location (server/obj-schema 
-                                "Location as coordiantes"
+                                "Location as coordinates"
                                 {:longitude (server/num-schema "Longitude" -180.0 180.0 nil nil nil)
                                  :latitude (server/num-schema "Latitude" -180.0 180.0 nil nil nil)}
                                 ["longitude" "latitude"])}
                    ["location"])
 ```
+
 <details>
-<summary>Map as schema</summary>
-Instead of using the provided functions you can just provide the schema as a map literal:
+<summary>Using Raw Schema Maps</summary>
+
+You can provide schemas as plain maps instead of using helper functions:
+
 ```clojure
 {:description "Location as coordinates",
  :properties {:longitude {:description "Longitude", :minimum -180.0, :maximum 180.0, :type "number"},
@@ -237,62 +236,53 @@ Instead of using the provided functions you can just provide the schema as a map
  :type "object"}
 ```
 
-Keys are converted to camelcase e.g. you can use `:exclusive-minimum` instead of `:exclusiveMinimum`.
+Keywords are automatically converted to camelCase (e.g., `:exclusive-minimum` becomes `:exclusiveMinimum`).
 </details>
 
-### Tool return values
+### Tool Return Values
 
-Result of tool operation is one or more Content objects. You can return a coll or a single object.
+Tools return one or more Content objects. You can return a single object or a collection:
 
 ```clojure
-;; text returns 
-;; {"content" [{"text" "ABC", "type" "text"}]}
+;; Simple text response
 "ABC"
 ["ABC"]
-;; with priority and audience
-;; {"text" "ABC", "annotations" {"priority" 1.5, "audience" ["user"]}, "type" "text"}
+
+;; Text with priority and audience metadata
 (core/text-content "ABC" 1.5 :user)
 
-;; other content types
-;; {"annotations" {"priority" 1.5, "audience" ["user" "assistant"]}, "type" "image", "mimeType" "image/jpeg", "data" "AQ=="}
+;; Other content types
 (core/image-content (byte-array [1]) "image/jpeg" 1.5 [:user :assistant])
-;; {"type" "audio", "mimeType" "audio/mpeg", "data" "AQ=="}
 (core/audio-content (byte-array [1]) "audio/mpeg")
 
-;; embedded resource type, return anything that coerces ResourceResponse,
-;; or explicitly call `c/embedded-content` if you want to add metadata
-
-;; These all result in the same thing
-;; {"resource" {"blob" "AQ==", "mimeType" "application/octet-stream"}, "type" "resource"}
+;; Embedded resources (multiple equivalent forms)
 (byte-array [1])
 (ByteArrayInputStream. (byte-array [1]))
 (core/embedded-content (byte-array [1]))
 (core/resource (byte-array [1]) "application/octet-stream" nil)
 
-;; These are both text resource
-;; {"resource" {"text" "Text as resource", "mimeType" "text/plain"}, "type" "resource"}
+;; Text resources
 (core/embedded-content "Text as resource")
 (core/resource "Text as resource" "text/plain" nil)
 
-;; With added URI
-(core/embedded-content (c/resource "{\"a\": 1}" "text/json" "https://localhost/x.json"))
+;; Resource with URI
+(core/embedded-content (core/resource "{\"a\": 1}" "text/json" "https://localhost/x.json"))
 
-;; a mix
+;; Mixed content
 ["ABC" (byte-array [1])]
 ```
 
-Besides being able to return RPC errors as described above, tools have their own error mechanism:
+Tools can also return specific error objects:
 
 ```clojure
-(core/tool-error "Text content")
+(core/tool-error "Something went wrong")
 ```
 
 ## Prompts
 
-Prompts can be added/removed from primordial and live sessions. Notifications will be automatically sent to live session's clients, when prompt list is modified.
+Prompts work similarly to tools - they can be added or removed from sessions with automatic client notification:
 
 ```clojure
-
 (defn code-review [exchange arguments]
   ...)
 
@@ -301,25 +291,20 @@ Prompts can be added/removed from primordial and live sessions. Notifications wi
                            {}
                            code-review))
 
-;; both modify the map and return the atom, you can ignore the return value if you wish
 (server/add-prompt session prompt)
 (server/remove-prompt session "code_review")
-;; client is notified of the prompt list change
 ```
 
-You can construct the prompt spec map manually.
+### Prompt Return Values
 
-### Prompt return values
-
-Return of prompt handler should be a description and one or more of messages. Again, many shorthands are possible:
+Prompt handlers return a description and one or more messages:
 
 ```clojure
-;; produces {"description" "Our special review prompt"
-;;           "messages" [{"content" {"text" "Here's the prompt", "type" "text"}}], }
+;; Full response object
+(core/prompt-resp "Our special review prompt" 
+                  [(core/message nil (core/text-content "Here's the prompt"))])
 
-;; the full response object
-(core/prompt-resp "Our special review prompt" [(core/message nil (core/text-content "Here's the prompt"))])
-;; you can skip wrapping it in core/message if you're not providing a role
+;; Simplified forms (all equivalent)
 (core/prompt-resp "Our special review prompt" [(core/text-content "Here's the prompt")])
 ;; for things like text you can skip wrapping in into context, and you can also skip vector if you have only 1 message
 (core/prompt-resp "Our special review prompt" "Here's the prompt")
@@ -330,20 +315,18 @@ Return of prompt handler should be a description and one or more of messages. Ag
 
 ## Resources
 
-Resources support is added by setting a resources handler.
-
-The handler needs to satisfy `org.clojars.roklenarcic.mcp-server.resources/Resources` protocol.
+Resource support is added by setting a resource handler that implements the `Resources` protocol:
 
 ```clojure
 (server/set-resources-handler session resources)
 ```
 
-In this Alpha version there is currently one implementation provided:
-- [Lookup Map based implementation](doc/resource-lookup.md)
+Currently, one implementation is provided:
+- [Lookup Map Resources](doc/resource-lookup.md)
 
-## Resource templates
+## Resource Templates
 
-Resource templates can be added/removed from primordial and live sessions.
+Resource templates can be added or removed from sessions:
 
 ```clojure
 (server/add-resource-template session 
@@ -359,32 +342,38 @@ Resource templates can be added/removed from primordial and live sessions.
 
 ## Completions
 
-Completions can be added/removed from primordial and live sessions.
+Completions provide autocomplete functionality:
 
 ```clojure
 (defn completion [exchange name value]
   (core/completion-resp ["completion 1" "completion 2"]))
 
-;; select ref/prompt or ref/resource and a name
+;; Add completion for specific prompts or resources
 (server/add-completion server "ref/prompt" "test-prompt" completion)
 (server/remove-completion server "ref/prompt" "test-prompt")
 ```
 
-You can set a general completion handler that will be used if no specific completion matches:
+You can also set a general completion handler for unmatched requests:
 
 ```clojure
 (server/set-completion-handler
   session
-  (fn [exchange ref-type ref-name name value] (core/completion-resp ["completion 1" "completion 2"])))
+  (fn [exchange ref-type ref-name name value] 
+    (core/completion-resp ["completion 1" "completion 2"])))
 ```
 
-## Logging to client
+## Client Communication
+
+### Logging
+
+Send log messages to the client:
 
 ```clojure
-(core/log-msg exchange :info "tool.weather" "Fetching weather data from weather.com" {:credits-left 20000})
+(core/log-msg exchange :info "tool.weather" "Fetching weather data from weather.com" 
+              {:credits-left 20000})
 ```
 
-## Listing roots
+### Listing Roots
 
 Roots can be listed via `exchange`, returning a CompletableFuture. If client declares the ability to notify on root list
 changes, then the roots are cached, with cached being cleared based on client's notification.
@@ -397,26 +386,26 @@ changes, then the roots are cached, with cached being cleared based on client's 
                     roots)))
 ```
 
-### Roots change callback
+### Roots Change Notifications
 
-Register a roots change callback to a primordial or live session:
+Register callbacks for when client roots change:
 
 ```clojure
 (server/set-roots-changed-callback session (fn [exchange] ...))
 ```
 
-## Sampling
+### Sampling
 
-You create a sampling request:
+Request text generation from the client:
 
 ```clojure
-;; first parameter is messages, which works the same as with prompt return value
-;; it can be as simple as a string or as complex as a vector of Message objects that contain Content
+;; Simple sampling request
 (core/sampling-request "Simple sampling"
                        (core/model-preferences [{:name "claude-3"}] nil nil) 
                        nil 
                        nil)
 
+;; Complex sampling with embedded resources
 (core/sampling-request [(core/message :user 
                                       (core/embedded-content
                                         (core/resource "Complex sampling param"
@@ -426,31 +415,69 @@ You create a sampling request:
                                         :assistant))]
                        (core/model-preferences [{:name "claude-3"}] nil nil)
                        "System prompt"
-                       ;; max tokens
-                       15555)
-```
+                       15555) ; max tokens
 
-With sampling request in hand you can request a sampling:
-
-```clojure
-;; can return nil if client doesn't support sampling
+;; Execute sampling (returns nil if client doesn't support it)
 (some-> (core/sampling exchange sampling-req)
         (.thenApply (fn [sampling-result]
-                      ;; sampling result is something like:
+                      ;; Result format:
                       ;; {:role "assistant",
-                      ;; :content {:type "text",
-                      ;;           :text "The capital of France is Paris."},
-                      ;; :model "claude-3-sonnet-20240307",
-                      ;; :stopReason "endTurn"}
+                      ;;  :content {:type "text", :text "Response text"},
+                      ;;  :model "claude-3-sonnet-20240307",
+                      ;;  :stopReason "endTurn"}
                       ...)))
 ```
 
 ## Logging
 
-Project uses clojure.tools.logging.
+This project uses `clojure.tools.logging` for internal logging.
 
 ## Middleware
 
+Dispatch table of JSON-RPC handlers can be modified using a middleware pattern, similar to Ring middleware.
+
+```clojure
+(rpc/with-middleware dispatch-table [[middleware1]
+                                     [middleware2 :param1 :param2]])
+```
+
+The handlers in the dispatch table will be changed to:
+
+```clojure
+(-> handler
+    (middleware2 :param1 :param2)
+    (middleware1))
+```
+
+Note that this is how Reitit works, `middleware1` is outer-most.
+
+Here's an example middleware:
+
+```
+(defn wrap-check-credentials
+  "Checks credentials"
+  [handler]
+  (fn check-credentials [rpc-session params]
+    (if (:user-id @rpc-session)
+      (handler rpc-session params)
+      (c/invalid-params "Wrong access."))))
+```
+
+Middleware can be supplied to the dispatch table creation function:
+
+```clojure
+(server/make-dispatch middleware)
+```
+
 ## Errors
+
+Any uncaught errors will be emitted as JSON-RPC internal errors, with Exception messages sent to the client. 
+
+Easiest way to modify this behavior and substitute a different strategy is to use the middleware approach and
+wrap the dispatch table handlers with middleware that performs your error handling strategy.
+
+```clojure
+(server/make-dispatch [[wrap-error-strategy]])
+```
 
 Copyright (c) 2025 Rok Lenarčič

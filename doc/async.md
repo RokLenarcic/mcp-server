@@ -1,32 +1,60 @@
-# Sync/Async
+# Synchronous and Asynchronous Execution
 
-The default mode of operation of the tools and transports is sync. There's several ways to change that.
+By default, the MCP server operates synchronously. This guide explains how to enable asynchronous execution when needed.
 
-### Return CompletableFuture
+## Returning CompletableFuture Objects
 
-Your tool handlers can return a `CompletableFuture`. How those futures are generated is up to you:
+The simplest way to make your handlers asynchronous is to return `CompletableFuture` objects from your tool handlers. You can generate these futures using any method you prefer:
 
-- Promesa
-- java Executors
-- core.async + CompletableFuture as promise
+- **Promesa**: A Clojure library for promises and futures
+- **Java Executors**: Built-in Java concurrent execution
+- **core.async**: Clojure's asynchronous programming library with CompletableFuture integration
 
-The downside here is that you'll have to have code there that will work with Executors and 
-the JSON RPC handlers that are not exposed to you (e.g. Ping, client response handlers, initialization, ...)
-will not use your async method.
+### Example
 
-### Wrap Dispatch table handlers
+```clojure
+(defn async-tool-handler [exchange arguments]
+  (CompletableFuture/supplyAsync
+    (fn []
+      ;; Your async work here
+      "Result from async operation")))
+```
 
-You can wrap all dispatch table handlers with code that will make them async using your preferred method. (You can also select which ones to wrap.)
+### Limitations
+
+When you return CompletableFuture objects, only your specific handlers become asynchronous. The internal JSON-RPC handlers (such as ping, client responses, and initialization) will still run synchronously because they're not exposed to your code.
+
+## Making All Handlers Asynchronous
+
+To make all dispatch table handlers asynchronous, you can wrap them during or after dispatch table creation. This approach affects both your handlers and the internal system handlers.
+
+### Using Default Executor
 
 ```clojure
 (server/add-async-to-dispatch (server/make-dispatch))
+```
 
+This wraps all handlers with a virtual thread executor (if available in your Java version) or falls back to a cached thread pool executor.
+
+### Using Custom Executor
+
+```clojure
 (server/add-async-to-dispatch (server/make-dispatch) my-executor)
 ```
 
-This will wrap all handlers with virtual thread executor (if available, cached pool executor otherwise).
+Replace `my-executor` with your preferred `ExecutorService` implementation.
+
+### How It Works
 
 <details>
-<summary>Implementation</summary>
-Uses `(rpc/with-middleware dispatch [[rpc/wrap-executor executor]])` to wrap all dispatch handlers.
+<summary>Implementation Details</summary>
+
+The `add-async-to-dispatch` function uses the middleware system to wrap all dispatch handlers:
+
+```clojure
+(rpc/with-middleware dispatch [[rpc/wrap-executor executor]])
+```
+
+This approach ensures consistent asynchronous behavior across all handlers in your MCP server.
+
 </details>
