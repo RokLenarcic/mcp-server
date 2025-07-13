@@ -219,7 +219,7 @@
    
    1-arg arity assumes that the values collection contains all available items."
   ([values] (completion-resp values (count values) (< 100 (count values))))
-  ([values total] (completion-resp values total (when total (< 100 total))))
+  ([values total] (completion-resp values total (when total (< (count values) total))))
   ([values total has-more?]
    {:values (take 100 values)
     :total total

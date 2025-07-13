@@ -39,10 +39,10 @@
   (if (not-any? #(= (name %) level) (keys clj-logging-level))
     (do
       (log/info "Client requested unsupported logging level:" level)
-      (log/debug "Supported levels:" (keys clj-logging-level))
+      (log/trace "Supported levels:" (keys clj-logging-level))
       (c/invalid-params (str "Unsupported logging level " level)))
     (do
-      (log/debug "Setting client logging level to:" level)
+      (log/trace "Setting client logging level to:" level)
       (swap! rpc-session assoc ::mcp/logging-level (keyword level))
       {})))
 

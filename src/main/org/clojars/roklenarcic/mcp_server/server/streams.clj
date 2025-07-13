@@ -22,9 +22,9 @@
   [session str-msg]
   (try
     (let [{::mcp/keys [dispatch-table serde]} @session
-          _ (log/debug "Processing message of length:" (count str-msg))
+          _ (log/trace "Processing message of length:" (count str-msg))
           parsed (rpc/parse-string str-msg serde)
-          _ (log/debug "Parsed message type:" (if (sequential? parsed) "batch" "single"))
+          _ (log/trace "Parsed message type:" (if (sequential? parsed) "batch" "single"))
           handle #(rpc/handle-parsed % dispatch-table session)]
       (pcatch (if (sequential? parsed)
                 (->> (keep handle parsed)
@@ -61,7 +61,7 @@
   [session ^InputStream is {:keys [client-req-timeout-ms]}]
   (let [^BufferedReader r (io/reader is)
         timeout-ms (or client-req-timeout-ms 120000)]
-    (log/info "Starting MCP server main loop with timeout:" timeout-ms "ms")
+    (log/debug "Starting MCP server main loop with timeout:" timeout-ms "ms")
     (try
       (loop []
         (if-let [msg (.readLine r)]
@@ -70,7 +70,7 @@
                       (fn [response]
                         (when response
                           (let [json-response (rpc/json-serialize (::mcp/serde @session) response)]
-                            (log/debug "Sending response of length:" (count json-response))
+                            (log/trace "Sending response of length:" (count json-response))
                             ((::mcp/send-to-client @session) json-response)))))
               (recur))
           (do (log/info "EOF reached, stopping server")
@@ -87,9 +87,8 @@
    
    Returns a new session atom"
   [session-template ^OutputStream os]
-  (log/info "Creating stream session from template")
   (let [write-string-fn (fn [json-str]
-                          (log/debug "Writing response to stream:" json-str)
+                          (log/trace "Writing response to stream:" json-str)
                           (locking os  ; Ensure thread-safe writes
                             (doto (io/writer os)
                               (.write ^String json-str)

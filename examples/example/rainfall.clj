@@ -33,3 +33,12 @@
     (run-jetty
       (http/ring-handler session (http/memory-sessions-store) {:endpoint "http://localhost:5556/sse"})
       {:port 5556 })))
+
+(defn post-to-http-client [id method params]
+  (client/post "http://localhost:5556/sse?sessionId=sss"
+               {:content-type :json
+                :form-params {:jsonrpc "2.0" :id id :method method :params params}}))
+
+(comment
+
+  (future (start)))

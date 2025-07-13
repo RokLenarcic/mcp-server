@@ -33,7 +33,7 @@
    
    Returns a collection of message objects."
   [resp]
-  (log/debug "Extracting messages from response type:" (type resp))
+  (log/trace "Extracting messages from response type:" (type resp))
   (cond
     (satisfies? p/PromptResponse resp) (->messages (p/-prompt-msgs resp))
     (or (satisfies? p/Message resp)
@@ -53,7 +53,7 @@
     resp
     (let [description (when (satisfies? p/PromptResponse resp) (p/-prompt-desc resp))
           messages (->messages resp)]
-      (log/debug "Creating prompt result with" (count messages) "messages")
+      (log/trace "Creating prompt result with" (count messages) "messages")
       {:description description
        :messages (mapv common/proto->message messages)})))
 
@@ -66,7 +66,7 @@
    
    Returns a map with :prompts key containing the list of available prompts."
   [rpc-session _]
-  (log/debug "Client requested prompt list")
+  (log/trace "Client requested prompt list")
   (let [prompts (-> @rpc-session ::mcp/handlers :prompts vals)]
     (log/debug "Returning" (count prompts) "prompts:" (mapv :name prompts))
     {:prompts (or (mapv #(dissoc % :handler) prompts) [])}))
@@ -81,15 +81,15 @@
    Returns the result of prompt execution, or an error if the prompt is not found."
   [rpc-session {:keys [name arguments]}]
   (log/debug "Client requested prompt execution - name:" name)
-  (log/debug "Prompt arguments:" arguments)
+  (log/trace "Prompt arguments:" arguments)
   
   (if-let [prompt-handler (get-in @rpc-session [::mcp/handlers :prompts name :handler])]
     (do
-      (log/debug "Found prompt handler, executing prompt:" name)
+      (log/trace "Found prompt handler, executing prompt:" name)
       (-> (prompt-handler (common/create-req-session rpc-session) arguments)
           (papply get-prompt-result)))
     (do (log/info "Prompt not found:" name)
-        (log/debug "Available prompts:" (keys (get-in @rpc-session [::mcp/handlers :prompts])))
+        (log/trace "Available prompts:" (keys (get-in @rpc-session [::mcp/handlers :prompts])))
         (c/invalid-params (format "Prompt %s not found" name)))))
 
 (defn add-prompt-handlers [m]

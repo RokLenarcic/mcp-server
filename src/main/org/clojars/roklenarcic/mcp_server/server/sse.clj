@@ -72,7 +72,7 @@
         
         ;; Write the new message if provided
         (when msg 
-          (log/debug "Writing new message to SSE stream")
+          (log/trace "Writing new message to SSE stream")
           (.write w (str "data: " msg "\n\n")))
         
         (catch IOException e
@@ -101,10 +101,10 @@
       (cleanup-buffer q timeout-ms)
       (if os
         (do
-          (log/debug "Active SSE stream found, writing message immediately")
+          (log/trace "Active SSE stream found, writing message immediately")
           (write-responses session os q msg))
         (when msg 
-          (log/debug "No active SSE stream, queuing message")
+          (log/trace "No active SSE stream, queuing message")
           (.offer ^ConcurrentLinkedQueue q [(System/currentTimeMillis) msg]))))))
 
 (defn get-resp 
@@ -117,7 +117,6 @@
    
    Returns a StreamableResponseBody that establishes the SSE connection."
   [session sync? endpoint]
-  (log/debug "Creating GET response for SSE connection - sync:" sync? "endpoint:" endpoint)
   (reify ring/StreamableResponseBody
     (write-body-to-stream [this response os]
       (when endpoint
@@ -136,21 +135,19 @@
    
    Returns a StreamableResponseBody that sends the response via SSE."
   [session resp sync?]
-  (log/debug "Creating POST response for SSE message - sync:" sync?)
   (reify ring/StreamableResponseBody
     (write-body-to-stream [this response os]
-      (log/debug "Handling POST response via SSE")
       (let [new-sess (swap! session
                             (fn [session]
                               (if (::mcp/os session) 
                                 (do
-                                  (log/debug "Using existing SSE output stream")
+                                  (log/trace "Using existing SSE output stream")
                                   session)
                                 (do
-                                  (log/debug "Establishing new SSE output stream for POST")
+                                  (log/trace "Establishing new SSE output stream for POST")
                                   (assoc session ::mcp/os os)))))]
         
-        (log/debug "Processing SSE message response")
+        (log/trace "Processing SSE message response")
         (write-responses session os (::mcp/q new-sess) resp)
         
         ;; Close stream if synchronous or if another stream is active

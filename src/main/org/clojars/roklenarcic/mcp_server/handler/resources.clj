@@ -21,7 +21,7 @@
    Returns the resources handler object or nil if not configured."
   [rpc-session] 
   (let [resources (-> @rpc-session ::mcp/handlers :resources)]
-    (log/debug "Retrieved resources handler from session:" (some? resources))
+    (log/trace "Retrieved resources handler from session:" (some? resources))
     resources))
 
 (defn resources-list
@@ -33,14 +33,14 @@
    
    Returns a list of available resources or an error if resources not supported."
   [rpc-session {:keys [cursor]}]
-  (log/info "Client requested resource list" (when cursor (str " with cursor: " cursor)))
+  (log/debug "Client requested resource list" (when cursor (str " with cursor: " cursor)))
   
   (if-let [res (resources' rpc-session)]
     (do
-      (log/debug "Delegating to resources handler for listing")
+      (log/trace "Delegating to resources handler for listing")
       (res/list-resources res (common/create-req-session rpc-session) cursor))
     (do
-      (log/warn "Resources list requested but resources not supported")
+      (log/info "Resources list requested but resources not supported")
       (c/invalid-params "Resources are not supported"))))
 
 (defn wrap-resource
@@ -58,15 +58,15 @@
    Returns a wrapped handler that performs resource validation and resolution."
   [handler]
   (fn [rpc-session {:keys [uri]}]
-    (log/debug "Processing resource request for URI:" uri)
+    (log/trace "Processing resource request for URI:" uri)
     
     (if-let [resources (resources' rpc-session)]
       (if (string? uri)
         (let [exchange (common/create-req-session rpc-session)]
-          (log/debug "Attempting to resolve resource:" uri)
+          (log/trace "Attempting to resolve resource:" uri)
           (if-let [res (res/get-resource resources exchange uri)]
             (do
-              (log/debug "Resource resolved successfully, calling handler")
+              (log/trace "Resource resolved successfully, calling handler")
               (handler exchange res))
             (do
               (log/warn "Resource not found:" uri)
@@ -78,12 +78,7 @@
         (log/warn "Resource request but resources not supported")
         (c/invalid-params "Resources are not supported")))))
 
-;; =============================================================================
-;; Resource Response Processing Functions
-;; =============================================================================
-;; Functions for processing resource operation results.
-
-(defn get-resource-result 
+(defn get-resource-result
   "Converts a resource read result to MCP wire format.
    
    Parameters:
@@ -93,20 +88,11 @@
    Returns a map in MCP resource response format with :contents key."
   [resp req-uri]
   (if (instance? JSONRPCError resp)
-    (do
-      (log/debug "Resource read returned JSONRPCError")
-      resp)
-    (do
-      (log/debug "Converting resource read result to MCP format")
-      {:contents (mapv (partial common/proto->resource req-uri)
-                       (if (satisfies? p/ResourceResponse resp) [resp] resp))})))
+    resp
+    {:contents (mapv (partial common/proto->resource req-uri)
+                     (if (satisfies? p/ResourceResponse resp) [resp] resp))}))
 
-;; =============================================================================
-;; Resource Operation Handlers
-;; =============================================================================
-;; Functions for handling specific resource operations.
-
-(defn resources-read 
+(defn resources-read
   "Handles resources/read requests from the client.
    
    Parameters:
@@ -116,8 +102,6 @@
    Returns the resource content or an error."
   [exchange res]
   (log/info "Reading resource:" (:uri res))
-  (log/debug "Calling resource handler for read operation")
-  
   (-> ((:handler res) exchange (:uri res))
       (papply get-resource-result (:uri res))))
 
@@ -130,11 +114,10 @@
 
    Returns the subscribed URI."
   [exchange res]
-  (log/info "Subscribing to resource:" (:uri res))
+  (log/debug "Subscribing to resource:" (:uri res))
 
   (let [resources (resources' (c/get-session exchange))]
     (res/subscribe resources exchange (:uri res))
-    (log/debug "Successfully subscribed to resource:" (:uri res))
     (:uri res)))
 
 (defn unsubscribe
@@ -149,7 +132,6 @@
   (log/debug "Unsubscribing from resource:" (:uri res))
   (let [resources (resources' (c/get-session exchange))]
     (res/unsubscribe resources exchange (:uri res))
-    (log/debug "Successfully unsubscribed from resource:" (:uri res))
     (:uri res)))
 
 (defn notify-changed
@@ -173,7 +155,7 @@
     (rpc/send-notification rpc-session "notifications/resources/list_changed" nil)))
 
 (defn templates-list [rpc-session _]
-  (log/debug "Templates list called")
+  (log/trace "Templates list called")
   {:resourceTemplates (get-in @rpc-session [::mcp/handlers :resource-templates])})
 
 (defn ->resource-template [all]

@@ -9,9 +9,16 @@
                                cheshire/cheshire {:mvn/version "6.0.0"}
                                org.babashka/json {:mvn/version "0.1.6"}
                                clj-http/clj-http {:mvn/version "3.13.1"}
-                               camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}}
+                               camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
+                               org.clojure/test.check {:mvn/version "1.1.1"}
+                               io.github.cognitect-labs/test-runner
+                               {:git/tag "v0.5.1" :git/sha "dfb30dd6"}}
                   :extra-paths ["src/dev" "test"]
                   :exec-args {}}
+           :build {:ns-default build
+                   :deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
+                          org.clojure/clojure {:mvn/version "1.12.1"}
+                          slipset/deps-deploy {:mvn/version "0.2.2"}}}
            :examples {:extra-deps {com.cnuernber/charred {:mvn/version "1.037"}}
                       :exec-fn example.runner/start
                       :exec-args {}

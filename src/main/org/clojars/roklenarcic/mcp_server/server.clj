@@ -27,15 +27,6 @@
       h.prompts/add-prompt-handlers       ; Add prompt handlers
       h.tools/add-tool-handlers))         ; Add tool handlers
 
-(def ^{:arglists '([handler logging-level])} wrap-error
-  "Wraps handler with code that emits INTERNAL_ERROR JSON-RPC responses on exceptions.
-   This is the outermost middleware layer for error handling."
-  rpc/wrap-error)
-
-(def std-middleware
-  "Standard middleware stack applied to all MCP handlers."
-  [[wrap-error :info]])
-
 (defn add-tool
   "Adds a tool to a session and notifies the client.
    
@@ -215,13 +206,13 @@
   "Creates a dispatch table for JSON-RPC calls with the specified middleware.
    
    Parameters:
-   - middleware: (optional) middleware stack to apply, defaults to std-middleware
+   - middleware: (optional) middleware stack to apply
    
    This applies middleware to all endpoints in the dispatch table.
    See documentation on customizing this dispatch.
    
    Returns a configured dispatch table."
-  ([] (make-dispatch std-middleware))
+  ([] (make-dispatch []))
   ([middleware] (rpc/with-middleware mcp-functions middleware)))
 
 (defn add-async-to-dispatch

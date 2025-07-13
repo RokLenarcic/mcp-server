@@ -118,7 +118,7 @@
    
    Returns a vector of content maps in MCP format."
   [o]
-  (log/debug "Converting to content vector - input type:" (type o))
+  (log/trace "Converting to content vector - input type:" (type o))
   (cond
     (satisfies? p/ToolErrorResponse o) (->content-vector (p/-err-contents o))
     (sequential? o) (mapv proto->content o)
@@ -153,7 +153,7 @@
    
    Returns a CompletableFuture containing a vector of root objects."
   [rpc-session]
-  (log/debug "Requesting root list from client")
+  (log/trace "Requesting root list from client")
   (.thenApply
     ^CompletableFuture (rpc/send-request rpc-session "roots/list" nil)
     (fn [{:keys [roots]}]
@@ -185,14 +185,14 @@
         ;; Client supports list change notifications, use cached roots
         ;; use a delay to not start a request immediately (what if swap fails and repeats?)
         (let [state (swap! rpc-session update ::mcp/roots #(or % (delay (list-roots-req rpc-session))))]
-          (log/debug "Using cached/delayed roots request")
+          (log/trace "Using cached/delayed roots request")
           @(::mcp/roots state))
         ;; Client doesn't notify of changes, always request fresh
         (do
-          (log/debug "Client doesn't support list change notifications, requesting fresh roots")
+          (log/trace "Client doesn't support list change notifications, requesting fresh roots")
           (list-roots-req rpc-session)))
       (do
-        (log/debug "Client doesn't support roots capability, returning empty list")
+        (log/trace "Client doesn't support roots capability, returning empty list")
         (CompletableFuture/completedFuture [])))))
 
 (defn do-sampling 
@@ -205,7 +205,7 @@
    Returns a CompletableFuture containing the sampling result."
   [rpc-session {:keys [messages model-preferences system-prompt max-tokens]}]
   (let [{:keys [hints intelligence-priority speed-priority]} model-preferences]
-    (log/debug "Requesting sampling from client - messages:" (count (if (sequential? messages) messages [messages]))
+    (log/trace "Requesting sampling from client - messages:" (count (if (sequential? messages) messages [messages]))
                "max-tokens:" max-tokens)
     (rpc/send-request rpc-session
                       "sampling/createMessage"

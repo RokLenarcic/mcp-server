@@ -23,19 +23,19 @@
    
    Returns a completion response or error."
   [rpc-session {{:keys [name type]} :ref :keys [argument]}]
-  (log/debug "Processing completion request - type:" type "name:" name "argument:" (:name argument))
-  (log/debug "Completion argument value:" (:value argument))
+  (log/trace "Processing completion request - type:" type "name:" name "argument:" (:name argument))
+  (log/trace "Completion argument value:" (:value argument))
   
   ;; Try specific completion handler first
   (if-let [handler (get-in @rpc-session [::mcp/handlers :completions [type name]])]
-    (do (log/debug "Found specific completion handler for" type "/" name)
+    (do (log/trace "Found specific completion handler for" type "/" name)
         (handler (common/create-req-session rpc-session) (:name argument) (:value argument)))
     (if-let [handler (get-in @rpc-session [::mcp/handlers :def-completion])]
-      (do (log/debug "Using general completion handler for" type "/" name)
+      (do (log/trace "Using general completion handler for" type "/" name)
           (handler (common/create-req-session rpc-session) type name (:name argument) (:value argument)))
       (do (log/info "No completion handler found for" type "/" name)
-          (log/debug "Available specific completions:" (keys (get-in @rpc-session [::mcp/handlers :completions])))
-          (log/debug "General completion handler available:" (some? (get-in @rpc-session [::mcp/handlers :def-completion])))
+          (log/trace "Available specific completions:" (keys (get-in @rpc-session [::mcp/handlers :completions])))
+          (log/trace "General completion handler available:" (some? (get-in @rpc-session [::mcp/handlers :def-completion])))
           (c/invalid-params (format "Completion %s/%s not found" type name))))))
 
 (def handler (common/wrap-check-init do-completion))

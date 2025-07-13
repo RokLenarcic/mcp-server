@@ -10,7 +10,8 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
             [org.clojars.roklenarcic.mcp-server.handler.resources :as h.res]
-            [org.clojars.roklenarcic.mcp-server.resources :as res]))
+            [org.clojars.roklenarcic.mcp-server.resources :as res]
+            [org.clojars.roklenarcic.mcp-server.util :as util]))
 
 (defrecord LookupMapResources [support-subscriptions?]
   res/Resources
@@ -18,7 +19,7 @@
   (supports-subscriptions? [this] support-subscriptions?)
   (list-resources [this exchange cursor]
     (let [resources (::mcp/resource-list @(c/get-session exchange))]
-      {:next-cursor nil :resources (mapv #(dissoc % :handler) (vals resources))}))
+      {:next-cursor nil :resources (mapv #(util/camelcase-keys (dissoc % :handler)) (vals resources))}))
   (get-resource [this exchange uri]
     (get-in @(c/get-session exchange) [::mcp/resource-list uri]))
   (subscribe [this exchange uri]
@@ -73,14 +74,14 @@
   [session resource handler]
   (let [uri (:uri resource)]
     (log/info "Adding resource to session:" uri)
-    (log/debug "Resource details:" (dissoc resource :handler))
+    (log/trace "Resource details:" (dissoc resource :handler))
     
     (when-not uri
       (throw (ex-info "Resource must have a :uri" {:resource resource})))
     
     (let [res (assoc resource :handler handler)]
       (swap! session update ::mcp/resource-list assoc uri res)
-      (log/debug "Resource added to session map")
+      (log/trace "Resource added to session map")
       
       ;; Notify clients that the resource list has changed
       (h.res/notify-changed-list session)
@@ -110,10 +111,10 @@
     (if existing-resource
       (do
         (swap! session update ::mcp/resource-list dissoc uri)
-        (log/debug "Resource removed from session map")
+        (log/trace "Resource removed from session map")
         
         ;; Notify clients that the resource list has changed
-        (rpc/send-notification session "notifications/resources/list_changed" nil)
+        (h.res/notify-changed-list session)
         (log/debug "Resource list change notification sent")
         
         session)

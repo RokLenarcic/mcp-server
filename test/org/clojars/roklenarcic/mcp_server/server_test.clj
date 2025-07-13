@@ -139,7 +139,7 @@
                  "result" {"next-cursor" nil,
                            "resources"
                            [{"uri" "http://resource.txt",
-                             "mime-type" "text/plain",
+                             "mimeType" "text/plain",
                              "name" "My Resource",
                              "annotations" nil,
                              "description" "A big file of works"}]}

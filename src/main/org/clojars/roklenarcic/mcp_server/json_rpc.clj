@@ -36,7 +36,7 @@
         expired-id (fn [[created-ts id]] (when (< created-ts expired-ts) id))]
     ;; throttle to once per 500ms
     (when (= t (swap! last-cleanup #(if (= (quot % 500) (quot t 500)) % t)))
-      (log/debug "Cleaning up client requests older than" expire-ms "ms")
+      (log/trace "Cleaning up client requests older than" expire-ms "ms")
       (loop [expired-count 0]
         (if-let [id (and (.hasNext iter) (expired-id (.next iter)))]
           (do
@@ -208,22 +208,26 @@
    Returns a JSON-RPC response object or CompletableFuture."
   [parsed dispatch-table context]
   (let [{:keys [id error method params item-type]} parsed]
-    (log/debug "Handling parsed message - method:" method "type:" item-type "id:" id)
-    (case item-type
-      :error {:jsonrpc "2.0" :error error :id id}
-      (let [handler (get dispatch-table method (method-not-found-handler method))
-            result (handler context params)
-            obj->jrpc-resp #(if (and (map? %) (= "2.0" (:jsonrpc %)))
-                              (assoc % :id id)
-                              (make-response % id))]
-        (when id
-          (if (instance? CompletableFuture result)
-            (-> ^CompletableFuture result
-                (.thenApply obj->jrpc-resp)
-                (.exceptionally #(do
-                                   (log/error % "Error handling request ID" id)
-                                   (make-error-response p/INTERNAL_ERROR (ex-message %) id))))
-            (obj->jrpc-resp result)))))))
+    (try
+      (log/debug "Handling parsed message - method:" method "type:" item-type "id:" id)
+      (case item-type
+        :error {:jsonrpc "2.0" :error error :id id}
+        (let [handler (get dispatch-table method (method-not-found-handler method))
+              result (handler context params)
+              obj->jrpc-resp #(if (and (map? %) (= "2.0" (:jsonrpc %)))
+                                (assoc % :id id)
+                                (make-response % id))]
+          (when id
+            (if (instance? CompletableFuture result)
+              (-> ^CompletableFuture result
+                  (.thenApply obj->jrpc-resp)
+                  (.exceptionally #(do
+                                     (log/error % "Error handling request ID" id)
+                                     (make-error-response p/INTERNAL_ERROR (ex-message %) id))))
+              (obj->jrpc-resp result)))))
+      (catch Exception e
+        (log/error e)
+        (make-error-response p/INTERNAL_ERROR (ex-message e) id)))))
 
 (defn parse-string [msg serde] (-> serde (json-deserialize msg) p/object->requests))
 

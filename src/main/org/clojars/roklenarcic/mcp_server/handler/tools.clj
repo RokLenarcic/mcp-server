@@ -38,9 +38,9 @@
    
    Returns a map with :tools key containing the list of available tools."
   [rpc-session _]
-  (log/info "Client requested tool list")
+  (log/debug "Client requested tool list")
   (let [tools (or (-> @rpc-session ::mcp/handlers :tools vals) [])]
-    (log/debug "Returning" (count tools) "tools:" (mapv :name tools))
+    (log/trace "Returning" (count tools) "tools:" (mapv :name tools))
     {:tools tools}))
 
 (defn tools-call 
@@ -53,15 +53,15 @@
    Returns the result of tool execution, or an error if the tool is not found."
   [rpc-session {:keys [name arguments]}]
   (log/debug "Client requested tool execution - name:" name)
-  (log/debug "Tool arguments:" arguments)
+  (log/trace "Tool arguments:" arguments)
   
   (if-let [tool-handler (get-in @rpc-session [::mcp/handlers :tools name :handler])]
-    (do (log/debug "Found tool handler, executing tool:" name)
+    (do (log/trace "Found tool handler, executing tool:" name)
         (-> (tool-handler (common/create-req-session rpc-session) arguments)
             (papply map->tool-message)))
     (do
       (log/warn "Tool not found:" name)
-      (log/debug "Available tools:" (keys (get-in @rpc-session [::mcp/handlers :tools])))
+      (log/trace "Available tools:" (keys (get-in @rpc-session [::mcp/handlers :tools])))
       (c/invalid-params (format "Tool %s not found" name)))))
 
 (defn add-tool-handlers [m]

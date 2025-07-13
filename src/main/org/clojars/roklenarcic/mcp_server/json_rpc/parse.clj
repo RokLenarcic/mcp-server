@@ -102,7 +102,7 @@
    
    Returns a Parsed record or nil if the message is invalid."
   [{:keys [jsonrpc method id params result error] :as msg}]
-  (log/debug "Parsing JSON-RPC message - method:" method "id:" id "has-result:" (some? result) "has-error:" (some? error))
+  (log/trace "Parsing JSON-RPC message - method:" method "id:" id "has-result:" (some? result) "has-error:" (some? error))
   
   (cond
     (not= "2.0" jsonrpc)
@@ -113,7 +113,7 @@
     ;; Check if this is a client response (has result or error with id)
     (and id (or result error))
     (do
-      (log/debug "Detected client response message")
+      (log/trace "Detected client response message")
       (->notification :client-resp {:error error :result result :id id}))
 
     ;; Validate request ID if present
@@ -121,19 +121,19 @@
              (number? id)
              (nil? id)))
     (do
-      (log/debug "Invalid request ID type:" (type id))
+      (log/trace "Invalid request ID type:" (type id))
       (invalid-request (str "Invalid ID: " (pr-str id)) id))
 
     ;; Validate method name
     (not (string? method))
     (do
-      (log/debug "Invalid method name:" method)
+      (log/trace "Invalid method name:" method)
       (when id (invalid-request (str "Invalid Method: " (pr-str method)) id)))
 
     ;; Validate parameters if present
     (and (some? params) (not (or (vector? params) (map? params))))
     (do
-      (log/debug "Invalid params type:" (type params))
+      (log/trace "Invalid params type:" (type params))
       (when id (invalid-request (str "Invalid params: " (pr-str params)) id)))
 
     :else

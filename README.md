@@ -449,6 +449,8 @@ With sampling request in hand you can request a sampling:
 
 Project uses clojure.tools.logging.
 
+## Middleware
 
+## Errors
 
 Copyright (c) 2025 Rok Lenarčič
