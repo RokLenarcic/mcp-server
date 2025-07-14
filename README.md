@@ -133,6 +133,18 @@ Since sessions are just maps, you can build them manually instead of using the h
 
 The dispatch table is a lookup map that routes JSON-RPC calls to their handlers.
 
+## JSON Serializers
+
+You can write your own integration, by extending the `org.clojars.roklenarcic.mcp-server.json-rpc/JSONSerialization` protocol, but there are many available already:
+
+- org.clojars.roklenarcic.mcp-server.json.babashka/serde
+- org.clojars.roklenarcic.mcp-server.json.charred/serde
+- org.clojars.roklenarcic.mcp-server.json.cheshire/serde
+- org.clojars.roklenarcic.mcp-server.json.clj-data/serde
+- org.clojars.roklenarcic.mcp-server.json.jsonista/serde
+
+You need to add your own dependency for selected JSON serialization. 
+
 ## Key Namespaces
 
 ```clojure
