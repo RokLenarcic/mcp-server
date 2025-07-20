@@ -664,19 +664,109 @@
                   responses)))))
 
 ;; Progress notification test
-#_(deftest progress-notification-test
-    (testing "Progress notifications during long-running operation"
-      (let [{:keys [stdin stdout]} (test-in/create-server)]
-        ;; Make a request that might trigger progress notifications
-        (test-in/print-req stdin "resources/list" {})
-        (.close stdin)
+(deftest progress-notification-test
+  (testing "Progress notifications during tool execution with progress token"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          progress-tool (server/tool "Progress Tool"
+                                     "Tool that reports progress"
+                                     (server/obj-schema "Parameters for progress tool" {} [])
+                                     (fn [exchange arguments]
+                                       (c/report-progress exchange {:progress 25 :total 100 :message "Starting..."})
+                                       (c/report-progress exchange {:progress 50 :total 100 :message "Halfway..."})
+                                       (c/report-progress exchange {:progress 100 :total 100 :message "Complete!"})
+                                       "Tool execution finished"))]
+      
+      (server/add-tool server progress-tool)
+      (test-in/initialize s)
+      
+      ;; Send tool call with progress token in _meta
+      (doto stdin
+        (.write (json/write-json-str {:jsonrpc "2.0"
+                                      :method "tools/call"
+                                      :params {:name "Progress Tool"
+                                               :arguments {}
+                                               :_meta {:progressToken "test-progress-123"}}
+                                      :id 1}))
+        (.write "\n")
+        (.flush)
+        (.close))
 
-        ;; Read response - server might send progress notifications
-        (let [response (json/read-json (first (line-seq stdout)))]
+      ;; Should get progress notifications followed by tool response
+      (let [responses (read-responses stdout 6)]
+        ;; Filter out tool list change notifications
+        (let [progress-responses (filter #(= "notifications/progress" (get % "method")) responses)
+              tool-responses (filter #(contains? % "result") responses)]
+          
+          ;; Should have 3 progress notifications
+          (is (= 3 (count progress-responses)))
+          
+          ;; Check first progress notification
           (is (match? {"jsonrpc" "2.0"
-                       "result" {"resources" vector?}
-                       "id" int?}
-                      response))))))
+                       "method" "notifications/progress"
+                       "params" {"progressToken" "test-progress-123"
+                                 "progress" 25
+                                 "total" 100
+                                 "message" "Starting..."}}
+                      (first progress-responses)))
+          
+          ;; Check second progress notification
+          (is (match? {"jsonrpc" "2.0"
+                       "method" "notifications/progress"
+                       "params" {"progressToken" "test-progress-123"
+                                 "progress" 50
+                                 "total" 100
+                                 "message" "Halfway..."}}
+                      (second progress-responses)))
+          
+          ;; Check third progress notification
+          (is (match? {"jsonrpc" "2.0"
+                       "method" "notifications/progress"
+                       "params" {"progressToken" "test-progress-123"
+                                 "progress" 100
+                                 "total" 100
+                                 "message" "Complete!"}}
+                      (nth progress-responses 2)))
+          
+          ;; Should have tool response
+          (is (= 1 (count tool-responses)))
+          (is (match? {"jsonrpc" "2.0"
+                       "result" {"content" [{"text" "Tool execution finished"}]
+                                 "isError" false}
+                       "id" 1}
+                      (first tool-responses)))))))
+
+  (testing "Tool execution without progress token should not send progress notifications"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          progress-tool (server/tool "Progress Tool"
+                                     "Tool that reports progress"
+                                     (server/obj-schema "Parameters for progress tool" {} [])
+                                     (fn [exchange arguments]
+                                       (c/report-progress exchange {:progress 50 :total 100 :message "Progress..."})
+                                       (c/report-progress exchange {:progress 100 :total 100 :message "Done!"})
+                                       "Tool execution finished"))]
+      
+      (server/add-tool server progress-tool)
+      (test-in/initialize s)
+      
+      ;; Send tool call without progress token
+      (test-in/print-req stdin "tools/call" {:name "Progress Tool" :arguments {}})
+      (.close stdin)
+
+      ;; Should only get tool response, no progress notifications
+      (let [responses (read-responses stdout 3)
+            progress-responses (filter #(= "notifications/progress" (get % "method")) responses)
+            tool-responses (filter #(contains? % "result") responses)]
+        
+        ;; Should have no progress notifications
+        (is (= 0 (count progress-responses)))
+        
+        ;; Should have tool response
+        (is (= 1 (count tool-responses)))
+        (is (match? {"jsonrpc" "2.0"
+                     "result" {"content" [{"text" "Tool execution finished"}]
+                               "isError" false}
+                     "id" int?}
+                    (first tool-responses)))))))
 
 ;; Resource subscription test
 (deftest resource-subscription-test

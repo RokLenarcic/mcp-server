@@ -16,6 +16,9 @@
 
 (declare create-req-session)
 
+(defn create-req-session' [rpc-session params]
+  (create-req-session rpc-session (get-in params [:_meta :progressToken])))
+
 (defn to-role-list
   "Converts role keywords to string vectors for MCP protocol.
    
@@ -163,10 +166,10 @@
 (def handle-changed-root
   "Handler for root change notifications from the client."
   (wrap-check-init
-    (fn [rpc-session _]
+    (fn [rpc-session params]
       (log/debug "Client reported root directory changes")
       (when-let [cb (-> @rpc-session ::mcp/handlers :roots-changed-callback)]
-        (cb (create-req-session rpc-session)))
+        (cb (create-req-session' rpc-session params)))
       (swap! rpc-session dissoc ::mcp/roots)
       nil)))
 
@@ -236,6 +239,11 @@
         (catch IOException e
           (log/info e "Error closing old output stream"))))))
 
+(defn notify-progress
+  [rpc-session progress-token msg]
+  (log/debugf "Notifying progress on token %s: %s" progress-token msg)
+  (rpc/send-notification rpc-session "notifications/progress" (assoc msg :progressToken progress-token)))
+
 (defn create-req-session 
   "Creates a RequestExchange object from a session atom.
    
@@ -243,7 +251,7 @@
    - rpc-session: the session atom
    
    Returns a RequestExchange object that handlers can use to interact with the client."
-  [rpc-session]
+  [rpc-session progress-token]
   (reify c/RequestExchange
     (client-spec [this]
       (let [{::mcp/keys [client-info client-capabilities]} @rpc-session]
@@ -254,4 +262,7 @@
     (list-roots [this] (list-roots rpc-session))
     (sampling [this req] 
       (when (-> @rpc-session ::mcp/client-capabilities :sampling)
-        (do-sampling rpc-session req)))))
+        (do-sampling rpc-session req)))
+    (report-progress [this msg]
+      (when progress-token (notify-progress rpc-session progress-token msg))
+      (some? progress-token))))

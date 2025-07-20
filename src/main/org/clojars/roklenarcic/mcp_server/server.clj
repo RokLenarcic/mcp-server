@@ -278,8 +278,8 @@
 
 (defn exchange
   "Converts a session atom to a RequestExchange object for use in handlers."
-  [session]
-  (handler/create-req-session session))
+  ([session] (exchange session nil))
+  ([session progress-token] (handler/create-req-session session progress-token)))
 
 (defn server-info
   "Creates server information and capabilities configuration.

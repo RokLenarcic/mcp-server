@@ -32,13 +32,13 @@
    - params: request parameters containing optional :cursor for pagination
    
    Returns a list of available resources or an error if resources not supported."
-  [rpc-session {:keys [cursor]}]
+  [rpc-session {:keys [cursor] :as params}]
   (log/debug "Client requested resource list" (when cursor (str " with cursor: " cursor)))
   
   (if-let [res (resources' rpc-session)]
     (do
       (log/trace "Delegating to resources handler for listing")
-      (res/list-resources res (common/create-req-session rpc-session) cursor))
+      (res/list-resources res (common/create-req-session' rpc-session params) cursor))
     (do
       (log/info "Resources list requested but resources not supported")
       (c/invalid-params "Resources are not supported"))))
@@ -57,12 +57,12 @@
    
    Returns a wrapped handler that performs resource validation and resolution."
   [handler]
-  (fn [rpc-session {:keys [uri]}]
+  (fn [rpc-session {:keys [uri] :as params}]
     (log/trace "Processing resource request for URI:" uri)
     
     (if-let [resources (resources' rpc-session)]
       (if (string? uri)
-        (let [exchange (common/create-req-session rpc-session)]
+        (let [exchange (common/create-req-session' rpc-session params)]
           (log/trace "Attempting to resolve resource:" uri)
           (if-let [res (res/get-resource resources exchange uri)]
             (do
@@ -143,7 +143,7 @@
    - uri: URI of the resource that changed"
   [rpc-session uri]
   (let [resources (resources' rpc-session)
-        exchange (common/create-req-session rpc-session)]
+        exchange (common/create-req-session' rpc-session nil)]
     (when (and (res/supports-subscriptions? resources)
                (::mcp/initialized? @rpc-session)
                (res/subscribed? resources exchange uri))

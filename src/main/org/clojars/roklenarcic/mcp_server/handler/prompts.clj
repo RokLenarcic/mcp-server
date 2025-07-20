@@ -79,14 +79,14 @@
    - params: request parameters containing :name (prompt name) and :arguments (prompt arguments)
    
    Returns the result of prompt execution, or an error if the prompt is not found."
-  [rpc-session {:keys [name arguments]}]
+  [rpc-session {:keys [name arguments] :as params}]
   (log/debug "Client requested prompt execution - name:" name)
   (log/trace "Prompt arguments:" arguments)
   
   (if-let [prompt-handler (get-in @rpc-session [::mcp/handlers :prompts name :handler])]
     (do
       (log/trace "Found prompt handler, executing prompt:" name)
-      (-> (prompt-handler (common/create-req-session rpc-session) arguments)
+      (-> (prompt-handler (common/create-req-session' rpc-session params) arguments)
           (papply get-prompt-result)))
     (do (log/info "Prompt not found:" name)
         (log/trace "Available prompts:" (keys (get-in @rpc-session [::mcp/handlers :prompts])))

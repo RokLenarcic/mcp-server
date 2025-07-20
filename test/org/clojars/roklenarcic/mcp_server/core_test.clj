@@ -300,6 +300,41 @@
       (is (satisfies? p/ToolErrorResponse error))
       (is (= content (p/-err-contents error))))))
 
+
+(deftest request-exchange-test
+  (testing "Progress reporting functionality"
+    (let [progress-calls (atom [])
+          mock-exchange (reify c/RequestExchange
+                          (client-spec [this] {:info {} :capabilities {}})
+                          (get-session [this] (atom {}))
+                          (log-msg [this level logger msg data] nil)
+                          (list-roots [this] nil)
+                          (sampling [this req] nil)
+                          (report-progress [this msg]
+                            (swap! progress-calls conj msg)))]
+      
+      (testing "Basic progress reporting"
+        (c/report-progress mock-exchange {:progress 50 :total 100 :message "Processing..."})
+        (is (= 1 (count @progress-calls)))
+        (is (= {:progress 50 :total 100 :message "Processing..."} (first @progress-calls))))
+      
+      (testing "Multiple progress reports"
+        (reset! progress-calls [])
+        (c/report-progress mock-exchange {:progress 25 :total 100 :message "Starting..."})
+        (c/report-progress mock-exchange {:progress 75 :total 100 :message "Almost done..."})
+        (c/report-progress mock-exchange {:progress 100 :total 100 :message "Completed!"})
+        
+        (is (= 3 (count @progress-calls)))
+        (is (= {:progress 25 :total 100 :message "Starting..."} (first @progress-calls)))
+        (is (= {:progress 75 :total 100 :message "Almost done..."} (second @progress-calls)))
+        (is (= {:progress 100 :total 100 :message "Completed!"} (last @progress-calls))))
+      
+      (testing "Progress with minimal data"
+        (reset! progress-calls [])
+        (c/report-progress mock-exchange {:message "Simple update"})
+        (is (= 1 (count @progress-calls)))
+        (is (= {:message "Simple update"} (first @progress-calls)))))))
+
 (deftest edge-cases-test
   (testing "Empty collections and nil values"
     (let [empty-completion (c/completion-resp [])

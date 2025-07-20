@@ -22,17 +22,17 @@
      - :argument: map with :name and :value of the argument being completed
    
    Returns a completion response or error."
-  [rpc-session {{:keys [name type]} :ref :keys [argument]}]
+  [rpc-session {{:keys [name type]} :ref :keys [argument] :as params}]
   (log/trace "Processing completion request - type:" type "name:" name "argument:" (:name argument))
   (log/trace "Completion argument value:" (:value argument))
   
   ;; Try specific completion handler first
   (if-let [handler (get-in @rpc-session [::mcp/handlers :completions [type name]])]
     (do (log/trace "Found specific completion handler for" type "/" name)
-        (handler (common/create-req-session rpc-session) (:name argument) (:value argument)))
+        (handler (common/create-req-session' rpc-session params) (:name argument) (:value argument)))
     (if-let [handler (get-in @rpc-session [::mcp/handlers :def-completion])]
       (do (log/trace "Using general completion handler for" type "/" name)
-          (handler (common/create-req-session rpc-session) type name (:name argument) (:value argument)))
+          (handler (common/create-req-session' rpc-session params) type name (:name argument) (:value argument)))
       (do (log/info "No completion handler found for" type "/" name)
           (log/trace "Available specific completions:" (keys (get-in @rpc-session [::mcp/handlers :completions])))
           (log/trace "General completion handler available:" (some? (get-in @rpc-session [::mcp/handlers :def-completion])))

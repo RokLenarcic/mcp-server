@@ -51,13 +51,13 @@
    - params: request parameters containing :name (tool name) and :arguments (tool arguments)
    
    Returns the result of tool execution, or an error if the tool is not found."
-  [rpc-session {:keys [name arguments]}]
+  [rpc-session {:keys [name arguments] :as params}]
   (log/debug "Client requested tool execution - name:" name)
   (log/trace "Tool arguments:" arguments)
   
   (if-let [tool-handler (get-in @rpc-session [::mcp/handlers :tools name :handler])]
     (do (log/trace "Found tool handler, executing tool:" name)
-        (-> (tool-handler (common/create-req-session rpc-session) arguments)
+        (-> (tool-handler (common/create-req-session' rpc-session params) arguments)
             (papply map->tool-message)))
     (do
       (log/warn "Tool not found:" name)

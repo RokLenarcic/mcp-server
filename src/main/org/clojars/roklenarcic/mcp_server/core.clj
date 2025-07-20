@@ -29,7 +29,9 @@
     "Requests the client to perform LLM sampling/completion.
      Returns CompletableFuture with result, or nil if client doesn't support sampling.
      
-     sampling-request should be created with the sampling-request function."))
+     sampling-request should be created with the sampling-request function.")
+  (report-progress [this msg]
+    "Reports progress to client, msg is a map with :progress :total :message keys"))
 
 (extend-protocol p/ResourceResponse
   String
