@@ -21,6 +21,7 @@
        :client-resp rpc/handle-client-response  ; Handle responses from client
        "logging/setLevel" h.logging/logging-set-level  ; Set logging level
        "notifications/roots/list_changed" handler/handle-changed-root  ; Handle root changes
+       "notifications/progress" handler/handle-progress  ; Handle progress notification
        "completion/complete" h.completions/handler}  ; Handle completion requests
       h.init/add-init-handlers      ; Add initialization handlers
       h.resources/add-resources-handlers  ; Add resource management handlers

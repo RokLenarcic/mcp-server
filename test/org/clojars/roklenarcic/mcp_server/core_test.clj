@@ -309,7 +309,9 @@
                           (get-session [this] (atom {}))
                           (log-msg [this level logger msg data] nil)
                           (list-roots [this] nil)
+                          (list-roots [this progress-callback] nil)
                           (sampling [this req] nil)
+                          (sampling [this req progress-callback] nil)
                           (report-progress [this msg]
                             (swap! progress-calls conj msg)))]
       

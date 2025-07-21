@@ -34,7 +34,6 @@ These features are not yet implemented:
 - Pagination support
 - Authentication
 - Request cancellation
-- Progress reporting
 - Tool parameter schema validation
 - Protocol version 2025-06-18 support
 
@@ -385,17 +384,44 @@ Send log messages to the client:
               {:credits-left 20000})
 ```
 
+### Progress Reporting
+
+Report progress updates during long-running operations:
+
+```clojure
+;; Simple progress message
+(core/report-progress exchange {:message "Processing data..."})
+
+;; Progress with completion percentage
+(core/report-progress exchange {:progress 50 :total 100 :message "Halfway done..."})
+
+;; Full progress information
+(core/report-progress exchange {:progress 75 
+                                :total 100 
+                                :message "Almost finished processing..."})
+```
+
+Progress reporting returns `true` if the progress was sent to the client, or `false` if there's no progress token available (which means the client didn't request progress updates).
+
 ### Listing Roots
 
 Roots can be listed via `exchange`, returning a CompletableFuture. If client declares the ability to notify on root list
 changes, then the roots are cached, with cached being cleared based on client's notification.
 
 ```clojure
+;; Basic root listing
 (.thenApply (core/list-roots exchange) 
             (fn [roots]
               (mapv (fn [{:keys [name uri]}]
                       (println "Client root" name "at" uri))
                     roots)))
+
+;; With progress callback
+(.thenApply (core/list-roots exchange 
+                             (fn [progress]
+                               (println "Root listing progress:" (:message progress))))
+            (fn [roots]
+              (println "Got" (count roots) "roots")))
 ```
 
 ### Roots Change Notifications
@@ -429,7 +455,7 @@ Request text generation from the client:
                        "System prompt"
                        15555) ; max tokens
 
-;; Execute sampling (returns nil if client doesn't support it)
+;; Basic execution (returns nil if client doesn't support it)
 (some-> (core/sampling exchange sampling-req)
         (.thenApply (fn [sampling-result]
                       ;; Result format:
@@ -438,6 +464,15 @@ Request text generation from the client:
                       ;;  :model "claude-3-sonnet-20240307",
                       ;;  :stopReason "endTurn"}
                       ...)))
+
+;; With progress callback to monitor generation progress
+(some-> (core/sampling exchange 
+                       sampling-req
+                       (fn [progress]
+                         (println "Sampling progress:" (:message progress)
+                                  (:progress progress) "/" (:total progress))))
+        (.thenApply (fn [sampling-result]
+                      (println "Generation complete:" (:content sampling-result)))))
 ```
 
 ## Logging

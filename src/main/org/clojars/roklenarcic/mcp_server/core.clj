@@ -10,7 +10,7 @@
 
 (defprotocol RequestExchange
   "An Exchange scoped to the request - the main interface for MCP handlers."
-  (client-spec [this] 
+  (client-spec [this]
     "Returns data about client capabilities and information.
      Returns a map with :info and :capabilities keys.")
   (get-session [this] "Returns the session data atom.")
@@ -22,12 +22,17 @@
      - logger: string identifying the logger
      - msg: log message string
      - data: optional additional data to include")
-  (list-roots [this] 
+  (list-roots [this] [this progress-callback]
     "Lists the client's root directories/URIs.
+
+     If progress-callback is supplied, it will be called when client reports progress.
+
      Returns a CompletableFuture containing a vector of root objects.")
-  (sampling [this sampling-request]
+  (sampling [this sampling-request] [this sampling-request progress-callback]
     "Requests the client to perform LLM sampling/completion.
      Returns CompletableFuture with result, or nil if client doesn't support sampling.
+
+     If progress-callback is supplied, it will be called when client reports progress.
      
      sampling-request should be created with the sampling-request function.")
   (report-progress [this msg]

@@ -11,8 +11,33 @@
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]])
   (:import (java.io ByteArrayOutputStream IOException InputStream OutputStream)
-           (java.util Base64)
-           (java.util.concurrent CompletableFuture)))
+           (java.util Base64 UUID)
+           (java.util.concurrent CompletableFuture ConcurrentHashMap)))
+
+(def ^ConcurrentHashMap client-progress
+  "Map of progress tokens to callback function"
+  (ConcurrentHashMap.))
+
+(defn send-request
+  "Sends a request to the client and returns a CompletableFuture for the response.
+
+   This also handles progress callback, unlike the json-rpc version.
+
+   Parameters:
+   - rpc-session: the session atom
+   - method: request method name
+   - params: (optional) request parameters
+   - progress-callback: optional progress callback
+
+   Returns a CompletableFuture that will complete with the client's response."
+  [rpc-session method params progress-callback]
+  (let [token (when progress-callback (str (UUID/randomUUID)))
+        params (if token
+                 (do (.put client-progress token progress-callback)
+                     (assoc-in params [:_meta :progressToken] token))
+                 params)]
+    (cond-> (rpc/send-request rpc-session method params)
+      token (.whenComplete (fn [_ _] (.remove client-progress token))))))
 
 (declare create-req-session)
 
@@ -153,12 +178,13 @@
    
    Parameters:
    - rpc-session: the session atom
+   - progress-callback: progress callback
    
    Returns a CompletableFuture containing a vector of root objects."
-  [rpc-session]
+  [rpc-session progress-callback]
   (log/trace "Requesting root list from client")
   (.thenApply
-    ^CompletableFuture (rpc/send-request rpc-session "roots/list" nil)
+    ^CompletableFuture (send-request rpc-session "roots/list" nil progress-callback)
     (fn [{:keys [roots]}]
       (log/debug "Received roots response - count:" (if (map? roots) 1 (count roots)))
       (if (map? roots) [roots] (vec roots)))))
@@ -173,27 +199,38 @@
       (swap! rpc-session dissoc ::mcp/roots)
       nil)))
 
+(def handle-progress
+  "Handler for progress notification from the client."
+  (wrap-check-init
+    (fn [rpc-session params]
+      (log/debug "Client reported progress")
+      (when-let [token (-> params :_meta :progressToken)]
+        (when-let [cb (.get client-progress token)]
+          (cb params)))
+      nil)))
+
 (defn list-roots 
   "Lists the client's root directories, using caching when appropriate.
    
    Parameters:
    - rpc-session: the session atom
+   - progress-callback: callback function for
    
    Returns a CompletableFuture containing a vector of root objects."
-  [rpc-session]
+  [rpc-session progress-callback]
   (let [{::mcp/keys [client-capabilities]} @rpc-session]
     (log/debug "Listing client roots - capabilities:" (keys client-capabilities))
     (if (:roots client-capabilities)
       (if (-> client-capabilities :roots :listChanged)
         ;; Client supports list change notifications, use cached roots
         ;; use a delay to not start a request immediately (what if swap fails and repeats?)
-        (let [state (swap! rpc-session update ::mcp/roots #(or % (delay (list-roots-req rpc-session))))]
+        (let [state (swap! rpc-session update ::mcp/roots #(or % (delay (list-roots-req rpc-session progress-callback))))]
           (log/trace "Using cached/delayed roots request")
           @(::mcp/roots state))
         ;; Client doesn't notify of changes, always request fresh
         (do
           (log/trace "Client doesn't support list change notifications, requesting fresh roots")
-          (list-roots-req rpc-session)))
+          (list-roots-req rpc-session progress-callback)))
       (do
         (log/trace "Client doesn't support roots capability, returning empty list")
         (CompletableFuture/completedFuture [])))))
@@ -206,19 +243,20 @@
    - sampling-request: map containing :messages, :model-preferences, :system-prompt, :max-tokens
    
    Returns a CompletableFuture containing the sampling result."
-  [rpc-session {:keys [messages model-preferences system-prompt max-tokens]}]
+  [rpc-session {:keys [messages model-preferences system-prompt max-tokens]} progress-callback]
   (let [{:keys [hints intelligence-priority speed-priority]} model-preferences]
     (log/trace "Requesting sampling from client - messages:" (count (if (sequential? messages) messages [messages]))
                "max-tokens:" max-tokens)
-    (rpc/send-request rpc-session
-                      "sampling/createMessage"
-                      (?assoc {:messages (mapv proto->message (if (sequential? messages) messages [messages]))}
-                              :modelPreferences (?assoc nil
-                                                        :hints hints
-                                                        :intelligencePriority intelligence-priority
-                                                        :speedPriority speed-priority)
-                              :systemPrompt system-prompt
-                              :maxTokens max-tokens))))
+    (send-request rpc-session
+                  "sampling/createMessage"
+                  (?assoc {:messages (mapv proto->message (if (sequential? messages) messages [messages]))}
+                          :modelPreferences (?assoc nil
+                                                    :hints hints
+                                                    :intelligencePriority intelligence-priority
+                                                    :speedPriority speed-priority)
+                          :systemPrompt system-prompt
+                          :maxTokens max-tokens)
+                  progress-callback)))
 
 (defn change-watcher
   "Watcher function that monitors session changes and sends notifications to client."
@@ -259,10 +297,14 @@
     (get-session [this] rpc-session)
     (log-msg [this level logger msg data]
       (h.logging/do-log rpc-session level logger msg data))
-    (list-roots [this] (list-roots rpc-session))
-    (sampling [this req] 
+    (list-roots [this] (list-roots rpc-session nil))
+    (list-roots [this progress-callback] (list-roots rpc-session progress-callback))
+    (sampling [this req]
       (when (-> @rpc-session ::mcp/client-capabilities :sampling)
-        (do-sampling rpc-session req)))
+        (do-sampling rpc-session req nil)))
+    (sampling [this req progress-callback]
+      (when (-> @rpc-session ::mcp/client-capabilities :sampling)
+        (do-sampling rpc-session req progress-callback)))
     (report-progress [this msg]
       (when progress-token (notify-progress rpc-session progress-token msg))
       (some? progress-token))))
