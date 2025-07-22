@@ -36,7 +36,8 @@
      
      sampling-request should be created with the sampling-request function.")
   (report-progress [this msg]
-    "Reports progress to client, msg is a map with :progress :total :message keys"))
+    "Reports progress to client, msg is a map with :progress :total :message keys")
+  (is-cancelled? [this] "Returns true if the request is cancelled (or not executing anymore)"))
 
 (extend-protocol p/ResourceResponse
   String

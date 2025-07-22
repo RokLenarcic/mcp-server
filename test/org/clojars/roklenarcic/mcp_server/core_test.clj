@@ -313,7 +313,8 @@
                           (sampling [this req] nil)
                           (sampling [this req progress-callback] nil)
                           (report-progress [this msg]
-                            (swap! progress-calls conj msg)))]
+                            (swap! progress-calls conj msg))
+                          (is-cancelled? [this] false))]
       
       (testing "Basic progress reporting"
         (c/report-progress mock-exchange {:progress 50 :total 100 :message "Processing..."})
@@ -336,6 +337,27 @@
         (c/report-progress mock-exchange {:message "Simple update"})
         (is (= 1 (count @progress-calls)))
         (is (= {:message "Simple update"} (first @progress-calls)))))))
+
+(deftest request-cancellation-test
+  (testing "Request cancellation functionality"
+    (let [cancelled-state (atom false)
+          mock-exchange (reify c/RequestExchange
+                          (client-spec [this] {:info {} :capabilities {}})
+                          (get-session [this] (atom {}))
+                          (log-msg [this level logger msg data] nil)
+                          (list-roots [this] nil)
+                          (list-roots [this progress-callback] nil)
+                          (sampling [this req] nil)
+                          (sampling [this req progress-callback] nil)
+                          (report-progress [this msg] false)
+                          (is-cancelled? [this] @cancelled-state))]
+      
+      (testing "Initially not cancelled"
+        (is (false? (c/is-cancelled? mock-exchange))))
+      
+      (testing "Can be cancelled"
+        (reset! cancelled-state true)
+        (is (true? (c/is-cancelled? mock-exchange)))))))
 
 (deftest edge-cases-test
   (testing "Empty collections and nil values"

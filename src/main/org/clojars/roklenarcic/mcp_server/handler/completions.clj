@@ -29,10 +29,10 @@
   ;; Try specific completion handler first
   (if-let [handler (get-in @rpc-session [::mcp/handlers :completions [type name]])]
     (do (log/trace "Found specific completion handler for" type "/" name)
-        (handler (common/create-req-session' rpc-session params) (:name argument) (:value argument)))
+        (handler (common/create-req-session rpc-session params) (:name argument) (:value argument)))
     (if-let [handler (get-in @rpc-session [::mcp/handlers :def-completion])]
       (do (log/trace "Using general completion handler for" type "/" name)
-          (handler (common/create-req-session' rpc-session params) type name (:name argument) (:value argument)))
+          (handler (common/create-req-session rpc-session params) type name (:name argument) (:value argument)))
       (do (log/info "No completion handler found for" type "/" name)
           (log/trace "Available specific completions:" (keys (get-in @rpc-session [::mcp/handlers :completions])))
           (log/trace "General completion handler available:" (some? (get-in @rpc-session [::mcp/handlers :def-completion])))

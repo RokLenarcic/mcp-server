@@ -38,7 +38,7 @@
   (if-let [res (resources' rpc-session)]
     (do
       (log/trace "Delegating to resources handler for listing")
-      (res/list-resources res (common/create-req-session' rpc-session params) cursor))
+      (res/list-resources res (common/create-req-session rpc-session params) cursor))
     (do
       (log/info "Resources list requested but resources not supported")
       (c/invalid-params "Resources are not supported"))))
@@ -62,7 +62,7 @@
     
     (if-let [resources (resources' rpc-session)]
       (if (string? uri)
-        (let [exchange (common/create-req-session' rpc-session params)]
+        (let [exchange (common/create-req-session rpc-session params)]
           (log/trace "Attempting to resolve resource:" uri)
           (if-let [res (res/get-resource resources exchange uri)]
             (do
@@ -143,7 +143,7 @@
    - uri: URI of the resource that changed"
   [rpc-session uri]
   (let [resources (resources' rpc-session)
-        exchange (common/create-req-session' rpc-session nil)]
+        exchange (common/create-req-session rpc-session nil)]
     (when (and (res/supports-subscriptions? resources)
                (::mcp/initialized? @rpc-session)
                (res/subscribed? resources exchange uri))

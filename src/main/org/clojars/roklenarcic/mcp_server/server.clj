@@ -21,6 +21,7 @@
        :client-resp rpc/handle-client-response  ; Handle responses from client
        "logging/setLevel" h.logging/logging-set-level  ; Set logging level
        "notifications/roots/list_changed" handler/handle-changed-root  ; Handle root changes
+       "notifications/cancelled" handler/handle-request-cancelled
        "notifications/progress" handler/handle-progress  ; Handle progress notification
        "completion/complete" h.completions/handler}  ; Handle completion requests
       h.init/add-init-handlers      ; Add initialization handlers
@@ -278,9 +279,9 @@
   (h.resources/notify-changed session uri))
 
 (defn exchange
-  "Converts a session atom to a RequestExchange object for use in handlers."
+  "Converts a session atom to a RequestExchange object."
   ([session] (exchange session nil))
-  ([session progress-token] (handler/create-req-session session progress-token)))
+  ([session params] (handler/create-req-session session params)))
 
 (defn server-info
   "Creates server information and capabilities configuration.

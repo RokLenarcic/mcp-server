@@ -35,14 +35,12 @@
         params (if token
                  (do (.put client-progress token progress-callback)
                      (assoc-in params [:_meta :progressToken] token))
-                 params)]
-    (cond-> (rpc/send-request rpc-session method params)
+                 params)
+        cancel-handler #(rpc/send-notification rpc-session "notifications/cancelled" {:requestId %})]
+    (cond-> (rpc/send-request rpc-session method params cancel-handler)
       token (.whenComplete (fn [_ _] (.remove client-progress token))))))
 
 (declare create-req-session)
-
-(defn create-req-session' [rpc-session params]
-  (create-req-session rpc-session (get-in params [:_meta :progressToken])))
 
 (defn to-role-list
   "Converts role keywords to string vectors for MCP protocol.
@@ -195,7 +193,7 @@
     (fn [rpc-session params]
       (log/debug "Client reported root directory changes")
       (when-let [cb (-> @rpc-session ::mcp/handlers :roots-changed-callback)]
-        (cb (create-req-session' rpc-session params)))
+        (cb (create-req-session rpc-session params)))
       (swap! rpc-session dissoc ::mcp/roots)
       nil)))
 
@@ -204,9 +202,16 @@
   (wrap-check-init
     (fn [rpc-session params]
       (log/debug "Client reported progress")
-      (when-let [token (-> params :_meta :progressToken)]
+      (when-let [token (:progressToken params)]
         (when-let [cb (.get client-progress token)]
           (cb params)))
+      nil)))
+
+(def handle-request-cancelled
+  (wrap-check-init
+    (fn [rpc-session {:keys [requestId reason]}]
+      (log/infof "Request %s cancelled: %s" requestId reason)
+      (rpc/update-inflight rpc-session disj requestId)
       nil)))
 
 (defn list-roots 
@@ -287,9 +292,10 @@
    
    Parameters:
    - rpc-session: the session atom
+   - params: request params
    
    Returns a RequestExchange object that handlers can use to interact with the client."
-  [rpc-session progress-token]
+  [rpc-session params]
   (reify c/RequestExchange
     (client-spec [this]
       (let [{::mcp/keys [client-info client-capabilities]} @rpc-session]
@@ -306,5 +312,10 @@
       (when (-> @rpc-session ::mcp/client-capabilities :sampling)
         (do-sampling rpc-session req progress-callback)))
     (report-progress [this msg]
-      (when progress-token (notify-progress rpc-session progress-token msg))
-      (some? progress-token))))
+      (let [progress-token (get-in params [:_meta :progressToken])]
+        (when progress-token (notify-progress rpc-session progress-token msg))
+        (some? progress-token)))
+    (is-cancelled? [this]
+      (if-let [id (::mcp/request-id params)]
+        (-> @rpc-session ::mcp/in-flight (contains? id) not)
+        false))))

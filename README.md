@@ -33,7 +33,6 @@ These features are not yet implemented:
 
 - Pagination support
 - Authentication
-- Request cancellation
 - Tool parameter schema validation
 - Protocol version 2025-06-18 support
 
@@ -474,6 +473,43 @@ Request text generation from the client:
         (.thenApply (fn [sampling-result]
                       (println "Generation complete:" (:content sampling-result)))))
 ```
+
+### Cancelling Server Requests to Client
+
+When your server makes requests to the client (`list-roots`, `sampling`), you can cancel them using the `CompletableFuture` cancel method. When cancelled with `mayInterruptIfRunning=true`, the client is automatically notified:
+
+```clojure
+;; Start a request to the client
+(let [future (core/sampling exchange sampling-req)]
+  ;; Cancel it if needed (notifies client)
+  (.cancel future true)  ; true = mayInterruptIfRunning, sends cancellation notification to client
+  
+  .....
+  )
+```
+
+If future is derefed it will throw an Exception (as per usual Future contract).
+
+### Handling Client Cancellation Requests
+
+When the client cancels a request to your server (like a tool call), your handlers can detect this and respond appropriately:
+
+```clojure
+(defn long-running-tool [exchange arguments]
+  (loop [i 0]
+    ;; Check if the client has cancelled this request
+    (if (core/is-cancelled? exchange)
+      ;; return is ignored
+      "ignored"
+      (do
+        ;; Do work...
+        (Thread/sleep 100)
+        (if (< i 100)
+          (recur (inc i))
+          "Work completed")))))
+```
+
+The client sends cancellation via "notifications/cancelled" messages, and your tools can check `(core/is-cancelled? exchange)` to detect when they should stop processing and return early.
 
 ## Logging
 

@@ -378,7 +378,7 @@
           send-fn (fn [json-str] (swap! requests conj json-str))
           session (atom {::mcp/send-to-client send-fn
                          ::mcp/serde test-serde})
-          future-result (rpc/send-request session "test/request" {:param "value"})]
+          future-result (rpc/send-request session "test/request" {:param "value"} identity)]
       (is (instance? CompletableFuture future-result))
       (is (= 1 (count @requests)))
       (let [sent-json (first @requests)

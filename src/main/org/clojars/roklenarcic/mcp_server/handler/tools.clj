@@ -57,7 +57,7 @@
   
   (if-let [tool-handler (get-in @rpc-session [::mcp/handlers :tools name :handler])]
     (do (log/trace "Found tool handler, executing tool:" name)
-        (-> (tool-handler (common/create-req-session' rpc-session params) arguments)
+        (-> (tool-handler (common/create-req-session rpc-session params) arguments)
             (papply map->tool-message)))
     (do
       (log/warn "Tool not found:" name)
