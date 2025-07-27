@@ -5,7 +5,7 @@
             [deps-deploy.deps-deploy :as deps-deploy]))
 
 (def lib 'org.clojars.roklenarcic/mcp-server)
-(def version (format "0.1.%s" (b/git-count-revs nil)))
+(def version (format "0.2.%s" (b/git-count-revs nil)))
 
 (defn create-opts [cli-opts aliases]
       (let [target (:target cli-opts "target")
