@@ -19,7 +19,7 @@
                                          {:subscribe (resources/supports-subscriptions? (:resources handlers)),
                                           :listChanged (resources/supports-list-changed? (:resources handlers))})))
 
-(defn initialize-handler [rpc-session {:keys [protocolVersion capabilities clientInfo]}]
+(defn initialize-handler [rpc-session req-meta {:keys [protocolVersion capabilities clientInfo]}]
   (let [{::mcp/keys [server-info handlers] :as sess} @rpc-session]
     (if (allowed-protocol-versions protocolVersion)
       (if (some? (::mcp/initialized? sess))
@@ -36,7 +36,7 @@
                     :instructions (:instructions server-info))))
       (c/invalid-request (format "Invalid protocol version %s, supported version %s" protocolVersion allowed-protocol-versions)))))
 
-(defn init-notify-handler [rpc-session _]
+(defn init-notify-handler [rpc-session req-meta _]
   (swap! rpc-session update ::mcp/initialized? #(if (false? %) true %))
   nil)
 

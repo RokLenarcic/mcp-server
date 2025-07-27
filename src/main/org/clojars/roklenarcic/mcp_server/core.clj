@@ -10,6 +10,7 @@
 
 (defprotocol RequestExchange
   "An Exchange scoped to the request - the main interface for MCP handlers."
+  (req-meta [this] "Returns request metadata")
   (client-spec [this]
     "Returns data about client capabilities and information.
      Returns a map with :info and :capabilities keys.")

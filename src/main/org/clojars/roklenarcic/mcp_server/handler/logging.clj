@@ -34,7 +34,7 @@
    - params: request parameters containing :level (string log level name)
    
    Returns an empty map on success, or an error for invalid levels."
-  [rpc-session {:keys [level]}]
+  [rpc-session req-meta {:keys [level]}]
   (log/debug "Client requesting logging level change to:" level)
   (if (not-any? #(= (name %) level) (keys clj-logging-level))
     (do

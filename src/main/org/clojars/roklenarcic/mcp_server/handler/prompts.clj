@@ -65,7 +65,7 @@
    - _: unused parameters
    
    Returns a map with :prompts key containing the list of available prompts."
-  [rpc-session _]
+  [rpc-session req-meta _]
   (log/trace "Client requested prompt list")
   (let [prompts (-> @rpc-session ::mcp/handlers :prompts vals)]
     (log/debug "Returning" (count prompts) "prompts:" (mapv :name prompts))
@@ -79,14 +79,14 @@
    - params: request parameters containing :name (prompt name) and :arguments (prompt arguments)
    
    Returns the result of prompt execution, or an error if the prompt is not found."
-  [rpc-session {:keys [name arguments] :as params}]
+  [rpc-session req-meta {:keys [name arguments] :as params}]
   (log/debug "Client requested prompt execution - name:" name)
   (log/trace "Prompt arguments:" arguments)
   
   (if-let [prompt-handler (get-in @rpc-session [::mcp/handlers :prompts name :handler])]
     (do
       (log/trace "Found prompt handler, executing prompt:" name)
-      (-> (prompt-handler (common/create-req-session rpc-session params) arguments)
+      (-> (prompt-handler (common/create-req-session rpc-session req-meta params) arguments)
           (papply get-prompt-result)))
     (do (log/info "Prompt not found:" name)
         (log/trace "Available prompts:" (keys (get-in @rpc-session [::mcp/handlers :prompts])))

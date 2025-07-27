@@ -134,9 +134,9 @@
    
    Returns a wrapped handler function."
   [handler logging-level]
-  (fn error-middleware [context params]
+  (fn error-middleware [context req-meta params]
     (try
-      (let [resp (handler context params)]
+      (let [resp (handler context req-meta params)]
         (if (instance? CompletableFuture resp)
           (.exceptionally ^CompletableFuture resp
                           (fn [e]
@@ -156,8 +156,8 @@
    
    Returns a wrapped handler that returns a CompletableFuture."
   [handler executor]
-  (fn executor-middleware [context params]
-    (-> #(handler context params)
+  (fn executor-middleware [context req-meta params]
+    (-> #(handler context req-meta params)
         (CompletableFuture/supplyAsync executor)
         (.thenCompose (fn [ret]
                         (if (instance? CompletableFuture ret) 
@@ -188,7 +188,7 @@
    
    Returns a handler function that returns a method not found error."
   [method]
-  (fn [_ _] (c/->JSONRPCError p/METHOD_NOT_FOUND (format "Method '%s' not found." method) nil)))
+  (fn [_ _ _] (c/->JSONRPCError p/METHOD_NOT_FOUND (format "Method '%s' not found." method) nil)))
 
 (defn handle-client-response
   "Handles responses from the client to our requests.
@@ -198,7 +198,7 @@
    - params: response parameters containing :error, :result, and :id
    
    Returns nil (this is a notification handler)."
-  [_ {:keys [error result id] :as params}]
+  [_ req-meta {:keys [error result id] :as params}]
   (when-let [^CompletableFuture cb (and params id (.remove client-req-pending id))]
     (log/debug "Handling client response for id:" id "error:" (some? error))
     (if-let [{:keys [code message data]} error]
@@ -217,9 +217,10 @@
    - parsed: parsed message object
    - dispatch-table: function dispatch table
    - context: request context
+   - req-context: request specific context
    
    Returns a JSON-RPC response object or CompletableFuture."
-  [parsed dispatch-table context]
+  [parsed dispatch-table context req-meta]
   (let [{:keys [id error method params item-type]} parsed]
     (try
       (log/debug "Handling parsed message - method:" method "type:" item-type "id:" id)
@@ -227,7 +228,7 @@
       (case item-type
         :error {:jsonrpc "2.0" :error error :id id}
         (let [handler (get dispatch-table method (method-not-found-handler method))
-              result (handler context (?assoc params ::mcp/request-id id))
+              result (handler context (?assoc req-meta ::mcp/request-id id) params)
               obj->jrpc-resp #(if (and (map? %) (= "2.0" (:jsonrpc %)))
                                 (assoc % :id id)
                                 (make-response % id))]

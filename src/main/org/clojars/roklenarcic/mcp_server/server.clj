@@ -17,7 +17,7 @@
 
 (def mcp-functions
   "Core MCP function dispatch table mapping method names to handlers."
-  (-> {"ping" (constantly {})  ; Basic ping handler for connectivity testing
+  (-> {"ping" (fn [_ _ _] {})  ; Basic ping handler for connectivity testing
        :client-resp rpc/handle-client-response  ; Handle responses from client
        "logging/setLevel" h.logging/logging-set-level  ; Set logging level
        "notifications/roots/list_changed" handler/handle-changed-root  ; Handle root changes
@@ -281,7 +281,7 @@
 (defn exchange
   "Converts a session atom to a RequestExchange object."
   ([session] (exchange session nil))
-  ([session params] (handler/create-req-session session params)))
+  ([session req-meta] (handler/create-req-session session req-meta {})))
 
 (defn server-info
   "Creates server information and capabilities configuration.

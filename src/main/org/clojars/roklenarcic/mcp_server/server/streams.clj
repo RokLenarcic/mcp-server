@@ -25,7 +25,7 @@
           _ (log/trace "Processing message of length:" (count str-msg))
           parsed (rpc/parse-string str-msg serde)
           _ (log/trace "Parsed message type:" (if (sequential? parsed) "batch" "single"))
-          handle #(rpc/handle-parsed % dispatch-table session)]
+          handle #(rpc/handle-parsed % dispatch-table session nil)]
       (pcatch (if (sequential? parsed)
                 (->> (keep handle parsed)
                      rpc/combine-futures)

@@ -190,10 +190,10 @@
 
 (deftest handle-parsed-test
   (testing "Valid method dispatch"
-    (let [dispatch-table {"test-method" (fn [context params] {:success true})}
+    (let [dispatch-table {"test-method" (fn [context req-meta params] {:success true})}
           context (atom {})
           request (parse/->request "test-method" {} 1)
-          response (rpc/handle-parsed request dispatch-table context)]
+          response (rpc/handle-parsed request dispatch-table context nil)]
       (is (= "2.0" (:jsonrpc response)))
       (is (= {:success true} (:result response)))
       (is (= 1 (:id response)))))
@@ -202,25 +202,25 @@
     (let [dispatch-table {}
           context (atom {})
           request (parse/->request "unknown-method" {} 1)
-          response (rpc/handle-parsed request dispatch-table context)]
+          response (rpc/handle-parsed request dispatch-table context nil)]
       (is (= "2.0" (:jsonrpc response)))
       (is (= parse/METHOD_NOT_FOUND (get-in response [:error :code])))
       (is (= 1 (:id response)))))
 
   (testing "Notification handling"
     (let [handled (atom false)
-          dispatch-table {"test-notification" (fn [context params] (reset! handled true))}
+          dispatch-table {"test-notification" (fn [context req-meta params] (reset! handled true))}
           context (atom {})
           notification (parse/->notification "test-notification" {})]
-      (is (nil? (rpc/handle-parsed notification dispatch-table context)))
+      (is (nil? (rpc/handle-parsed notification dispatch-table context nil)))
       (is @handled)))
 
   (testing "CompletableFuture response"
     (let [future-result (CompletableFuture/completedFuture {:async true})
-          dispatch-table {"async-method" (fn [context params] future-result)}
+          dispatch-table {"async-method" (fn [context req-meta params] future-result)}
           context (atom {})
           request (parse/->request "async-method" {} 1)
-          response (rpc/handle-parsed request dispatch-table context)]
+          response (rpc/handle-parsed request dispatch-table context nil)]
       (is (instance? CompletableFuture response))
       (let [resolved @response]
         (is (= "2.0" (:jsonrpc resolved)))
@@ -229,7 +229,7 @@
 
   (testing "Error item-type handling"
     (let [error-msg (parse/->error -32600 "Test error" nil 123)
-          response (rpc/handle-parsed error-msg {} {})]
+          response (rpc/handle-parsed error-msg {} {} nil)]
       (is (= "2.0" (:jsonrpc response)))
       (is (= -32600 (get-in response [:error :code])))
       (is (= 123 (:id response))))))
@@ -279,37 +279,37 @@
 
 (deftest middleware-test
   (testing "Apply single middleware"
-    (let [handler (fn [ctx params] "original")
-          middleware (fn [handler] (fn [ctx params] (str "wrapped-" (handler ctx params))))
+    (let [handler (fn [ctx req-meta params] "original")
+          middleware (fn [handler] (fn [ctx req-meta params] (str "wrapped-" (handler ctx req-meta params))))
           wrapped (rpc/apply-middleware handler [middleware])]
-      (is (= "wrapped-original" (wrapped {} {})))))
+      (is (= "wrapped-original" (wrapped {} {} {})))))
 
   (testing "Apply multiple middleware"
-    (let [handler (fn [ctx params] "original")
-          middleware1 (fn [handler] (fn [ctx params] (str "m1-" (handler ctx params))))
-          middleware2 (fn [handler] (fn [ctx params] (str "m2-" (handler ctx params))))
+    (let [handler (fn [ctx req-meta params] "original")
+          middleware1 (fn [handler] (fn [ctx req-meta params] (str "m1-" (handler ctx req-meta params))))
+          middleware2 (fn [handler] (fn [ctx req-meta params] (str "m2-" (handler ctx req-meta params))))
           wrapped (rpc/apply-middleware handler [middleware1 middleware2])]
-      (is (= "m1-m2-original" (wrapped {} {})))))
+      (is (= "m1-m2-original" (wrapped {} {} {})))))
 
   (testing "Apply middleware to dispatch table"
-    (let [dispatch-table {"method1" (fn [ctx params] "result1")
-                          "method2" (fn [ctx params] "result2")}
-          middleware (fn [handler] (fn [ctx params] (str "wrapped-" (handler ctx params))))
+    (let [dispatch-table {"method1" (fn [ctx req-meta params] "result1")
+                          "method2" (fn [ctx req-meta params] "result2")}
+          middleware (fn [handler] (fn [ctx req-meta params] (str "wrapped-" (handler ctx req-meta params))))
           wrapped-table (rpc/with-middleware dispatch-table [middleware])]
-      (is (= "wrapped-result1" ((get wrapped-table "method1") {} {})))
-      (is (= "wrapped-result2" ((get wrapped-table "method2") {} {})))))
+      (is (= "wrapped-result1" ((get wrapped-table "method1") {} {} {})))
+      (is (= "wrapped-result2" ((get wrapped-table "method2") {} {} {})))))
 
   (testing "Vector-style middleware"
-    (let [handler (fn [ctx params] "original")
-          middleware-fn (fn [handler prefix] (fn [ctx params] (str prefix "-" (handler ctx params))))
+    (let [handler (fn [ctx req-meta params] "original")
+          middleware-fn (fn [handler prefix] (fn [ctx req-meta params] (str prefix "-" (handler ctx req-meta params))))
           wrapped (rpc/apply-middleware handler [[middleware-fn "test"]])]
-      (is (= "test-original" (wrapped {} {}))))))
+      (is (= "test-original" (wrapped {} {} {}))))))
 
 (deftest error-middleware-test
   (testing "Wrap handler with error handling"
-    (let [handler (fn [ctx params] (throw (RuntimeException. "test error")))
+    (let [handler (fn [ctx req-meta params] (throw (RuntimeException. "test error")))
           wrapped (rpc/wrap-error handler :info)
-          result (wrapped {} {})]
+          result (wrapped {} {} {})]
       (is (instance? org.clojars.roklenarcic.mcp_server.core.JSONRPCError result))
       (is (= parse/INTERNAL_ERROR (:code result)))
       (is (= "test error" (:message result)))))
@@ -317,9 +317,9 @@
   (testing "Wrap handler that returns CompletableFuture"
     (let [failed-future (CompletableFuture.)
           _ (.completeExceptionally failed-future (RuntimeException. "async error"))
-          handler (fn [ctx params] failed-future)
+          handler (fn [ctx req-meta params] failed-future)
           wrapped (rpc/wrap-error handler :info)
-          result (wrapped {} {})]
+          result (wrapped {} {} {})]
       (is (instance? CompletableFuture result))
       (let [resolved @result]
         (is (instance? org.clojars.roklenarcic.mcp_server.core.JSONRPCError resolved))
@@ -329,7 +329,7 @@
 (deftest method-not-found-handler-test
   (testing "Method not found handler"
     (let [handler (rpc/method-not-found-handler "unknown-method")
-          result (handler {} {})]
+          result (handler {} {} {})]
       (is (instance? org.clojars.roklenarcic.mcp_server.core.JSONRPCError result))
       (is (= parse/METHOD_NOT_FOUND (:code result)))
       (is (.contains (:message result) "unknown-method")))))
@@ -337,12 +337,12 @@
 (deftest handle-client-response-test
   (testing "Handle client success response"
     ;; This test verifies the handler function structure
-    (let [result (rpc/handle-client-response {} {:result {:success true} :id 123})]
+    (let [result (rpc/handle-client-response {} nil {:result {:success true} :id 123})]
       ;; Should return nil since it's a notification handler
       (is (nil? result))))
 
   (testing "Handle client error response"
-    (let [result (rpc/handle-client-response {} {:error {:code -1 :message "client error"} :id 456})]
+    (let [result (rpc/handle-client-response {} nil {:error {:code -1 :message "client error"} :id 456})]
       (is (nil? result)))))
 
 (deftest base-session-test

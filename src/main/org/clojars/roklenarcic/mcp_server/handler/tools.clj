@@ -37,7 +37,7 @@
    - _: unused parameters
    
    Returns a map with :tools key containing the list of available tools."
-  [rpc-session _]
+  [rpc-session req-meta _]
   (log/debug "Client requested tool list")
   (let [tools (or (-> @rpc-session ::mcp/handlers :tools vals) [])]
     (log/trace "Returning" (count tools) "tools:" (mapv :name tools))
@@ -51,13 +51,13 @@
    - params: request parameters containing :name (tool name) and :arguments (tool arguments)
    
    Returns the result of tool execution, or an error if the tool is not found."
-  [rpc-session {:keys [name arguments] :as params}]
+  [rpc-session req-meta {:keys [name arguments] :as params}]
   (log/debug "Client requested tool execution - name:" name)
   (log/trace "Tool arguments:" arguments)
   
   (if-let [tool-handler (get-in @rpc-session [::mcp/handlers :tools name :handler])]
     (do (log/trace "Found tool handler, executing tool:" name)
-        (-> (tool-handler (common/create-req-session rpc-session params) arguments)
+        (-> (tool-handler (common/create-req-session rpc-session req-meta params) arguments)
             (papply map->tool-message)))
     (do
       (log/warn "Tool not found:" name)

@@ -166,9 +166,9 @@
 (defn wrap-check-init
   "Middleware that ensures the session is initialized."
   [handler]
-  (fn check-params [rpc-session params]
+  (fn check-params [rpc-session req-meta params]
     (if (::mcp/initialized? @rpc-session)
-      (handler rpc-session params)
+      (handler rpc-session req-meta params)
       (c/invalid-params "Session not initialized."))))
 
 (defn- list-roots-req
@@ -190,17 +190,17 @@
 (def handle-changed-root
   "Handler for root change notifications from the client."
   (wrap-check-init
-    (fn [rpc-session params]
+    (fn [rpc-session req-meta params]
       (log/debug "Client reported root directory changes")
       (when-let [cb (-> @rpc-session ::mcp/handlers :roots-changed-callback)]
-        (cb (create-req-session rpc-session params)))
+        (cb (create-req-session rpc-session req-meta params)))
       (swap! rpc-session dissoc ::mcp/roots)
       nil)))
 
 (def handle-progress
   "Handler for progress notification from the client."
   (wrap-check-init
-    (fn [rpc-session params]
+    (fn [rpc-session req-meta params]
       (log/debug "Client reported progress")
       (when-let [token (:progressToken params)]
         (when-let [cb (.get client-progress token)]
@@ -209,7 +209,7 @@
 
 (def handle-request-cancelled
   (wrap-check-init
-    (fn [rpc-session {:keys [requestId reason]}]
+    (fn [rpc-session req-meta {:keys [requestId reason]}]
       (log/infof "Request %s cancelled: %s" requestId reason)
       (rpc/update-inflight rpc-session disj requestId)
       nil)))
@@ -292,11 +292,12 @@
    
    Parameters:
    - rpc-session: the session atom
-   - params: request params
+   - req-meta: request metadata, including at least ::mcp/request-id if available
    
    Returns a RequestExchange object that handlers can use to interact with the client."
-  [rpc-session params]
+  [rpc-session req-meta params]
   (reify c/RequestExchange
+    (req-meta [this] req-meta)
     (client-spec [this]
       (let [{::mcp/keys [client-info client-capabilities]} @rpc-session]
         {:info client-info :capabilities client-capabilities}))
@@ -316,6 +317,6 @@
         (when progress-token (notify-progress rpc-session progress-token msg))
         (some? progress-token)))
     (is-cancelled? [this]
-      (if-let [id (::mcp/request-id params)]
+      (if-let [id (-> req-meta ::mcp/request-id)]
         (-> @rpc-session ::mcp/in-flight (contains? id) not)
         false))))

@@ -32,7 +32,6 @@ The complexity didn't match the value. If you want to build a simple STDIO MCP s
 These features are not yet implemented:
 
 - Pagination support
-- Authentication
 - Tool parameter schema validation
 - Protocol version 2025-06-18 support
 
@@ -562,5 +561,16 @@ wrap the dispatch table handlers with middleware that performs your error handli
 ```clojure
 (server/make-dispatch [[wrap-error-strategy]])
 ```
+
+## Authentication
+
+MCP specification mandates use of OAuth2 authentication when used with HTTP transport. The server receives a token
+and uses the token to validate access. This process is very specific to each application so this library
+provides no tools for working with these tokens.
+
+The easiest way you can integrate your Authentication solution with this library is via the request meta.
+
+When using HTTP transport, the request meta that `RequestExchange` object provides, is the request map itself and 
+you can add your own Authentication logic to your handlers.
 
 Copyright (c) 2025 Rok Lenarčič

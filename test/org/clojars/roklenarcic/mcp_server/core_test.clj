@@ -305,6 +305,7 @@
   (testing "Progress reporting functionality"
     (let [progress-calls (atom [])
           mock-exchange (reify c/RequestExchange
+                          (req-meta [this] nil)
                           (client-spec [this] {:info {} :capabilities {}})
                           (get-session [this] (atom {}))
                           (log-msg [this level logger msg data] nil)
@@ -342,6 +343,7 @@
   (testing "Request cancellation functionality"
     (let [cancelled-state (atom false)
           mock-exchange (reify c/RequestExchange
+                          (req-meta [this] nil)
                           (client-spec [this] {:info {} :capabilities {}})
                           (get-session [this] (atom {}))
                           (log-msg [this level logger msg data] nil)

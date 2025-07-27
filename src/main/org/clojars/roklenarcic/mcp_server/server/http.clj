@@ -8,7 +8,7 @@
             [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
             [org.clojars.roklenarcic.mcp-server.server.sse :as sse]
             [org.clojars.roklenarcic.mcp-server.handler.common :as handler]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply pcatch]])
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
   (:import (java.security SecureRandom)
            (java.util Base64)
            (java.util.concurrent CompletableFuture ConcurrentHashMap ConcurrentLinkedQueue)))
@@ -76,7 +76,7 @@
           msg (slurp (:body req))
           _ (log/debug "Processing request" msg)
           parsed (rpc/parse-string msg serde)
-          handle #(rpc/handle-parsed % dispatch-table session)]
+          handle #(rpc/handle-parsed % dispatch-table session req)]
       (if (vector? parsed)
         (->> (keep handle parsed) rpc/combine-futures)
         (handle parsed)))
@@ -119,7 +119,7 @@
       (do
         (log/debug "Valid initialization request, creating new session")
         (let [new-session (add-session sessions (create-session session-map))
-              response (rpc/handle-parsed parsed dispatch-table new-session)
+              response (rpc/handle-parsed parsed dispatch-table new-session req)
               session-id (::mcp/id @new-session)]
           (log/debug "Session initialized successfully with ID:" session-id)
           (-> (json-resp 200 response serde)
