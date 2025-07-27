@@ -6,7 +6,8 @@
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.json-rpc.parse :as rpc]
             [org.clojars.roklenarcic.mcp-server.util :refer [map-of]])
-  (:import (java.io InputStream)))
+  (:import (java.io InputStream)
+           (java.util.concurrent CompletableFuture)))
 
 (defprotocol RequestExchange
   "An Exchange scoped to the request - the main interface for MCP handlers."
@@ -23,13 +24,13 @@
      - logger: string identifying the logger
      - msg: log message string
      - data: optional additional data to include")
-  (list-roots [this] [this progress-callback]
+  (^CompletableFuture list-roots [this] [this progress-callback]
     "Lists the client's root directories/URIs.
 
      If progress-callback is supplied, it will be called when client reports progress.
 
      Returns a CompletableFuture containing a vector of root objects.")
-  (sampling [this sampling-request] [this sampling-request progress-callback]
+  (^CompletableFuture sampling [this sampling-request] [this sampling-request progress-callback]
     "Requests the client to perform LLM sampling/completion.
      Returns CompletableFuture with result, or nil if client doesn't support sampling.
 
@@ -38,7 +39,7 @@
      sampling-request should be created with the sampling-request function.")
   (report-progress [this msg]
     "Reports progress to client, msg is a map with :progress :total :message keys")
-  (is-cancelled? [this] "Returns true if the request is cancelled (or not executing anymore)"))
+  (^CompletableFuture req-cancelled-future [this] "Returns CompletableFuture that is completed with cancellation message if the request is cancelled"))
 
 (extend-protocol p/ResourceResponse
   String
@@ -51,9 +52,9 @@
   (-res-uri [this] nil))
 
 (extend-type (class (make-array Byte/TYPE 0)) p/ResourceResponse
-  (-res-body [this] this)
-  (-res-mime [this] "application/octet-stream")
-  (-res-uri [this] nil))
+             (-res-body [this] this)
+             (-res-mime [this] "application/octet-stream")
+             (-res-uri [this] nil))
 
 (defrecord JSONRPCError [code message data])
 

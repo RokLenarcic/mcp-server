@@ -69,20 +69,20 @@
                  :serde serde
                  :dispatch-table dispatch-table
                  :handlers {}
-                 :in-flight #{}
+                 :in-flight {}
                  :logging-level (:logging server-info)}
          base-context))
 
-(defn update-inflight [context f id]
+(defn update-inflight [context f id & args]
   (when id
     (if (instance? IAtom context)
-      (swap! context update ::mcp/in-flight (fnil f #{}) id)
-      (update context ::mcp/in-flight (fnil f #{}) id)))
+      (apply swap! context update ::mcp/in-flight (fnil f {}) id args)
+      (apply update context ::mcp/in-flight (fnil f {}) id args)))
   nil)
 
-(defn is-inflight? [context id]
-  (get (::mcp/in-flight (if (instance? IAtom context) @context context))
-       id))
+(defn do-respond? [context id]
+  (when-let [^CompletableFuture fut (get (::mcp/in-flight (if (instance? IAtom context) @context context)) id)]
+    (not (.isDone fut))))
 
 (defn make-error-response
   "Creates a JSON-RPC error response map.
@@ -198,7 +198,7 @@
    - params: response parameters containing :error, :result, and :id
    
    Returns nil (this is a notification handler)."
-  [_ req-meta {:keys [error result id] :as params}]
+  [_ _ {:keys [error result id] :as params}]
   (when-let [^CompletableFuture cb (and params id (.remove client-req-pending id))]
     (log/debug "Handling client response for id:" id "error:" (some? error))
     (if-let [{:keys [code message data]} error]
@@ -209,6 +209,16 @@
         (log/debug "Client responded with success result")
         (.complete cb result)))
     nil))
+
+(defn obj->jrpc-resp
+  [context resp id]
+  (when-let [^CompletableFuture fut (get (::mcp/in-flight (if (instance? IAtom context) @context context)) id)]
+    (update-inflight context dissoc id)
+    (if (.isDone fut)
+      (log/debugf "Request %s cancelled, response ignored" id)
+      (if (and (map? resp) (= "2.0" (:jsonrpc resp)))
+        (assoc resp :id id)
+        (make-response resp id)))))
 
 (defn handle-parsed
   "Handles a parsed JSON-RPC message.
@@ -221,32 +231,23 @@
    
    Returns a JSON-RPC response object or CompletableFuture."
   [parsed dispatch-table context req-meta]
-  (let [{:keys [id error method params item-type]} parsed]
-    (try
-      (log/debug "Handling parsed message - method:" method "type:" item-type "id:" id)
-      (update-inflight context conj id)
-      (case item-type
-        :error {:jsonrpc "2.0" :error error :id id}
-        (let [handler (get dispatch-table method (method-not-found-handler method))
-              result (handler context (?assoc req-meta ::mcp/request-id id) params)
-              obj->jrpc-resp #(if (and (map? %) (= "2.0" (:jsonrpc %)))
-                                (assoc % :id id)
-                                (make-response % id))]
-          (when (is-inflight? context id)
-            (if (instance? CompletableFuture result)
-              (-> ^CompletableFuture result
-                  (.thenApply obj->jrpc-resp)
-                  (.whenComplete (fn [_ _] (update-inflight context disj id)))
-                  (.exceptionally #(do
-                                     (log/error % "Error handling request ID" id)
-                                     (make-error-response p/INTERNAL_ERROR (ex-message %) id))))
-              (obj->jrpc-resp result)))))
-      (catch Exception e
-        (log/error e)
-        (when (is-inflight? context id)
-          (make-error-response p/INTERNAL_ERROR (ex-message e) id)))
-      (finally
-        (update-inflight context disj id)))))
+  (let [{:keys [id error method params item-type]} parsed
+        handle-ex (fn [e]
+                    (log/error e "Error handling request ID" id)
+                    (make-error-response p/INTERNAL_ERROR (ex-message e) id))]
+    (log/debug "Handling parsed message - method:" method "type:" item-type "id:" id)
+    (case item-type
+      :error {:jsonrpc "2.0" :error error :id id}
+      (try
+        (let [_ (update-inflight context assoc id (CompletableFuture.))
+              handler (get dispatch-table method (method-not-found-handler method))
+              result (handler context (?assoc req-meta ::mcp/request-id id) params)]
+          (if (instance? CompletableFuture result)
+            (-> ^CompletableFuture result
+                (.exceptionally handle-ex)
+                (.thenApply (fn [resp] (obj->jrpc-resp context resp id))))
+            (obj->jrpc-resp context result id)))
+        (catch Exception e (obj->jrpc-resp context (handle-ex e) id))))))
 
 (defn parse-string [msg serde] (-> serde (json-deserialize msg) p/object->requests))
 

@@ -13,8 +13,10 @@
            (java.util.concurrent CompletableFuture)))
 
 ;; Helper function to read multiple responses
-(defn read-responses [stdout n]
-  (take n (map json/read-json (line-seq stdout))))
+(defn read-responses
+  ([stdout] (map json/read-json (line-seq stdout)))
+  ([stdout n]
+   (take n (read-responses stdout))))
 
 ;; Helper function to write a batch request
 (defn write-batch [stdin requests]
@@ -120,7 +122,7 @@
     (.close stdin)
 
     ;; Should get ping response (no response for notification)
-    (let [responses (read-responses stdout 1)]
+    (let [responses (read-responses stdout)]
       (is (match? {"jsonrpc" "2.0" "result" {} "id" int?}
                   (first responses))))))
 
@@ -432,17 +434,17 @@
                           :argument {:name "arg1" :value "test"}})
       (.close stdin)
       (is (match?
-            [{"id" int?
-              "jsonrpc" "2.0"
-              "result" {"hasMore" false
-                        "total" 2
-                        "values" ["AAAA"
-                                  "CCC"]}}
-             {"error" {"code" -32602
-                       "data" "Completion ref/prompt/unknown-prompt not found"
-                       "message" "Invalid Params"}
-              "id" int?
-              "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout))))))
+           [{"id" int?
+             "jsonrpc" "2.0"
+             "result" {"hasMore" false
+                       "total" 2
+                       "values" ["AAAA"
+                                 "CCC"]}}
+            {"error" {"code" -32602
+                      "data" "Completion ref/prompt/unknown-prompt not found"
+                      "message" "Invalid Params"}
+             "id" int?
+             "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout))))))
   (testing "Completion request with defaults"
     (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
       (test-in/initialize s)
@@ -460,17 +462,17 @@
                           :argument {:name "arg1" :value "test"}})
       (.close stdin)
       (is (match?
-            [{"id" int?
-              "jsonrpc" "2.0"
-              "result" {"hasMore" false
-                        "total" 2
-                        "values" ["AAAA"
-                                  "CCC"]}}
-             {"result" {"hasMore" false
-                        "total" 4
-                        "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}
-              "id" int?
-              "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout)))))))
+           [{"id" int?
+             "jsonrpc" "2.0"
+             "result" {"hasMore" false
+                       "total" 2
+                       "values" ["AAAA"
+                                 "CCC"]}}
+            {"result" {"hasMore" false
+                       "total" 4
+                       "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}
+             "id" int?
+             "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout)))))))
 
 ;; List roots test
 (deftest list-roots-test
@@ -512,7 +514,7 @@
       (server/add-tool server tool)
       (test-in/initialize s)
       (test-in/print-req stdin "tools/call" {:name "Test" :arguments {}})
-      (let [[list-roots-req] (read-responses stdout 1)
+      (let [[list-roots-req] (read-responses stdout)
             progress-token (get-in list-roots-req ["params" "_meta" "progressToken"])]
         (is (match? {"id" int?
                      "jsonrpc" "2.0"
@@ -536,7 +538,8 @@
         (write-raw-message stdin
                            {:jsonrpc "2.0" :result {:roots [{:uri "file:///home/user/projects/myproject"
                                                              :name "My Project"}]} :id (get list-roots-req "id")})
-        (let [responses (read-responses stdout 1)]
+        (.close stdin)
+        (let [responses (read-responses stdout)]
           (is (match? [{"id" int?
                         "jsonrpc" "2.0"
                         "result" {"content" [{"text" "Here's your roots [{:uri \"file:///home/user/projects/myproject\", :name \"My Project\"}]"
@@ -562,7 +565,8 @@
       (server/add-tool server tool)
       (test-in/initialize s)
       (test-in/print-req stdin "tools/call" {:name "Test" :arguments {}})
-      (let [client-req (read-responses stdout 2)]
+      (.close stdin)
+      (let [client-req (read-responses stdout)]
         (is (match? [{"id" int?
                       "jsonrpc" "2.0"
                       "method" "roots/list"}
@@ -626,7 +630,7 @@
 ;; Invalid method test
 (deftest invalid-method-test
   (is (match? {"jsonrpc" "2.0"
-               "error" {"code" -32601                       ; Method not found
+               "error" {"code" -32601 ; Method not found
                         "message" string?}
                "id" int?}
               (request-and-read "invalid/method" {}))))
@@ -641,7 +645,7 @@
         (.flush)
         (.close))
       (is (match? {"jsonrpc" "2.0"
-                   "error" {"code" -32600                   ; Invalid Request
+                   "error" {"code" -32600 ; Invalid Request
                             "message" string?}
                    "id" (m/any-of nil? int?)}
                   (json/read-json (first (line-seq stdout)))))))
@@ -653,7 +657,7 @@
         (.flush)
         (.close))
       (is (match? {"jsonrpc" "2.0"
-                   "error" {"code" -32700                   ; Parse error
+                   "error" {"code" -32700 ; Parse error
                             "message" string?}
                    "id" nil}
                   (json/read-json (first (line-seq stdout))))))))
@@ -666,7 +670,7 @@
                   {:jsonrpc "2.0" :method "tools/list" :params {} :id 2}
                   {:jsonrpc "2.0" :method "prompts/list" :params {} :id 3}])
     (.close stdin)
-    (let [responses (first (read-responses stdout 1))]
+    (let [responses (first (read-responses stdout))]
       (is (= 3 (count responses)))
       (is (every? #(= "2.0" (get % "jsonrpc")) responses))
       (is (= #{1 2 3} (set (map #(get % "id") responses)))))))
@@ -694,7 +698,7 @@
       (.close stdin)
 
       ;; Should get responses for all requests except notification
-      (let [responses (read-responses stdout 5)]
+      (let [responses (read-responses stdout)]
         (is (= 5 (count responses)))
         (is (every? #(contains? % "result") responses))))))
 
@@ -702,10 +706,10 @@
 (deftest error-handling-test
   (testing "Missing required parameters"
     (is (match? {"jsonrpc" "2.0"
-                 "error" {"code" -32602                     ; Invalid params
+                 "error" {"code" -32602 ; Invalid params
                           "message" string?}
                  "id" int?}
-                (request-and-read "resources/read" {}))))   ; Missing uri parameter
+                (request-and-read "resources/read" {})))) ; Missing uri parameter
 
   (testing "Wrong parameter types"
     (is (match? {"jsonrpc" "2.0"
@@ -718,83 +722,27 @@
 (deftest cancelled-request-test
   (testing "Tool can detect request cancellation via notifications/cancelled"
     (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
-          cancellation-results (atom [])
-          slow-tool (server/tool "Slow Tool"
+          reason (promise)
+          slow-tool (server/tool "test"
                                  "Tool that runs slowly and checks for cancellation"
-                                 (server/obj-schema "Parameters for slow tool" {} [])
+                                 (server/obj-schema "Parameters" {} [])
                                  (fn [exchange arguments]
-                                   (CompletableFuture/supplyAsync
-                                     (fn []
-
-                                       (let [start-time (System/currentTimeMillis)]
-                                         ;; Check cancellation status multiple times over 500ms
-                                         (loop [iterations 0]
-                                           (let [cancelled? (c/is-cancelled? exchange)
-                                                 elapsed (- (System/currentTimeMillis) start-time)]
-                                             (swap! cancellation-results conj {:iteration iterations
-                                                                               :cancelled cancelled?
-                                                                               :elapsed elapsed})
-                                             (if (or cancelled? (>= iterations 10) (>= elapsed 500))
-                                               (if cancelled?
-                                                 "Tool execution was cancelled"
-                                                 "Tool execution completed normally")
-                                               (do
-                                                 (Thread/sleep 50)
-                                                 (recur (inc iterations)))))))))))]
+                                   (.thenApply (c/req-cancelled-future exchange)
+                                               #(deliver reason %))))]
       
       (server/add-tool server slow-tool)
       (test-in/initialize s)
 
       (let [request-id "reqid"]
-        (test-in/print-req stdin "tools/call" {:name "Slow Tool" :arguments {}} request-id)
+        (test-in/print-req stdin "tools/call" {:name "test" :arguments {}} request-id)
         (write-raw-message stdin {:jsonrpc "2.0"
                                   :method "notifications/cancelled"
                                   :params {:requestId request-id
-                                           :reason "User requested cancellation"}})
-        (Thread/sleep 100)
-        (.close stdin))
-      (let [responses (read-responses stdout 3)]
-        (is (= [{"id" "reqid"
-                 "jsonrpc" "2.0"
-                 "result" {"content" [{"text" "Tool execution was cancelled"
-                                       "type" "text"}]
-                           "isError" false}}]
-               responses))
-        ;; Check that cancellation was detected at some point
-        (let [results @cancellation-results]
-          (is (> (count results) 0) "Tool should have checked cancellation status")
-
-          ;; At least one check should show the request as cancelled
-          ;; (after the notifications/cancelled message is processed)
-          (is (some :cancelled results) "Request should be detected as cancelled after notification")))))
-
-  (testing "Normal tool execution shows not cancelled"
-    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
-          cancellation-results (atom [])
-          quick-tool (server/tool "Quick Tool"
-                                  "Tool that checks cancellation quickly"
-                                  (server/obj-schema "Parameters for quick tool" {} [])
-                                  (fn [exchange arguments]
-                                    (swap! cancellation-results conj (c/is-cancelled? exchange))
-                                    "Quick execution completed"))]
-      
-      (server/add-tool server quick-tool)
-      (test-in/initialize s)
-      
-      ;; Execute the quick tool
-      (test-in/print-req stdin "tools/call" {:name "Quick Tool" :arguments {}} "test-id")
+                                           :reason "User requested cancellation"}}))
       (.close stdin)
-
-      ;; Read the response
-      (let [responses (read-responses stdout 3)]
-        (is (= [{"id" "test-id"
-                 "jsonrpc" "2.0"
-                 "result" {"content" [{"text" "Quick execution completed"
-                                       "type" "text"}]
-                           "isError" false}}]
-               responses))
-        ;; Cancellation check should show not cancelled
-        (is (= [false] @cancellation-results) "Normal execution should not be cancelled")))))
+      (let [responses (read-responses stdout)]
+        (is (= [] responses)))
+      (is (= "User requested cancellation" @reason)))))
 
 (deftest progress-notification-test
   (testing "Progress notifications during tool execution with progress token"
@@ -814,9 +762,9 @@
                                              :arguments {}
                                              :_meta {:progressToken "test-progress-123"}}
                          "test-id")
-
+      (.close stdin)
       ;; Should get progress notifications followed by tool response
-      (let [responses (read-responses stdout 4)]
+      (let [responses (read-responses stdout)]
         (is (= [{"jsonrpc" "2.0"
                  "method" "notifications/progress"
                  "params" {"progressToken" "test-progress-123"
@@ -864,7 +812,7 @@
                "result" {"content" [{"text" "Tool execution finished"
                                      "type" "text"}]
                          "isError" false}}]
-             (read-responses stdout 3))))))
+             (read-responses stdout))))))
 
 ;; Resource subscription test
 (deftest resource-subscription-test
@@ -908,7 +856,7 @@
       (.close stdin)
 
       ;; Read all responses
-      (let [responses (read-responses stdout 5)]
+      (let [responses (read-responses stdout)]
         (is (= 4 (count responses)))
         (is (every? #(= "2.0" (get % "jsonrpc")) responses))
         (is (every? #(contains? % "result") responses))
@@ -952,7 +900,7 @@
         (.flush)
         (.close))
       (is (match? {"jsonrpc" "2.0"
-                   "error" {"code" -32600                   ; Invalid Request
+                   "error" {"code" -32600 ; Invalid Request
                             "message" string?}
                    "id" nil}
                   (json/read-json (first (line-seq stdout)))))))
@@ -1033,7 +981,7 @@
       (.close stdin)
 
       ;; Read responses - might include log notifications
-      (let [responses (read-responses stdout 2)]
+      (let [responses (read-responses stdout)]
         (is (>= (count responses) 2))
         ;; At least the two request responses should be present
         (is (some #(contains? % "result") responses))))))
@@ -1088,7 +1036,7 @@
       (.close stdin)
 
       ;; Should only get ping response, not notification response
-      (let [responses (read-responses stdout 1)]
+      (let [responses (read-responses stdout)]
         (is (= 1 (count responses)))
         (is (match? {"jsonrpc" "2.0" "result" {} "id" int?}
                     (first responses)))))))

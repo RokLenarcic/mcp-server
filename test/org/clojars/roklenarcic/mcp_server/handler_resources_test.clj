@@ -12,7 +12,7 @@
 (deftest resources-list-test
   (testing "List resources when handler not set"
     (let [session (atom {::mcp/handlers {}})
-          result (resources/resources-list session {})]
+          result (resources/resources-list session {} {})]
       (is (match? {:code -32602
                    :message "Invalid Params"
                    :data "Resources are not supported"}
@@ -23,7 +23,7 @@
           session (atom {::mcp/handlers {:resources resource-map}})]
       (is (= {:next-cursor nil
               :resources []}
-             (resources/resources-list session {})))
+             (resources/resources-list session {} {})))
       (lookup/add-resource session
                            (c/resource-desc "file:///test.txt" "Test File" "A test" "text/plain" nil)
                            (fn [exchange uri] "file content"))
@@ -33,14 +33,14 @@
                            :mimeType "text/plain"
                            :name "Test File"
                            :uri "file:///test.txt"}]}
-             (resources/resources-list session {})))
+             (resources/resources-list session {} {})))
       (is (= {:next-cursor nil
               :resources [{:annotations nil
                            :description "A test"
                            :mimeType "text/plain"
                            :name "Test File"
                            :uri "file:///test.txt"}]}
-             (resources/resources-list session {:cursor "page-2"}))))))
+             (resources/resources-list session {} {:cursor "page-2"}))))))
 
 (deftest resources-read-test
   (testing "Read resource with valid resource object"
@@ -82,7 +82,7 @@
 (deftest resources-templates-list-test
   (testing "List templates when none exist"
     (let [session (atom {::mcp/handlers {}})
-          result (resources/templates-list session {})]
+          result (resources/templates-list session {} {})]
       (is (match? {:resourceTemplates nil} result))))
 
   (testing "List templates with some templates"
@@ -92,7 +92,7 @@
                     :mimeType "text/plain"
                     :annotations [{:audience [:user] :priority 1.0}]}
           session (atom {::mcp/handlers {:resource-templates [template]}})
-          result (resources/templates-list session {})]
+          result (resources/templates-list session {} {})]
       (is (match? {:resourceTemplates [template]} result)))))
 
 (deftest wrap-resource-test
@@ -103,7 +103,7 @@
           _ (lookup/add-resource session
                                  (c/resource-desc "file:///test.txt" "Test" "Test" "text/plain" nil)
                                  (fn [exchange uri] "content"))
-          result (wrapped-handler session {:uri "file:///test.txt"})]
+          result (wrapped-handler session {} {:uri "file:///test.txt"})]
       (is (= {:success true
               :uri "file:///test.txt"}
              result))))
@@ -112,7 +112,7 @@
     (let [handler (fn [exchange res] {:success true})
           wrapped-handler (resources/wrap-resource handler)
           session (atom {::mcp/handlers {}})
-          result (wrapped-handler session {:uri "file:///test.txt"})]
+          result (wrapped-handler session {} {:uri "file:///test.txt"})]
       (is (match? {:code -32602
                    :message "Invalid Params"
                    :data "Resources are not supported"}
@@ -122,7 +122,7 @@
     (let [handler (fn [exchange res] {:success true})
           wrapped-handler (resources/wrap-resource handler)
           session (atom {::mcp/handlers {:resources (lookup/lookup-map false)}})
-          result (wrapped-handler session {:uri 123})]
+          result (wrapped-handler session {} {:uri 123})]
       (is (match? {:code -32602
                    :message "Invalid Params"
                    :data "Param 'uri' needs to be a string."}
@@ -132,7 +132,7 @@
     (let [handler (fn [exchange res] {:success true})
           wrapped-handler (resources/wrap-resource handler)
           session (atom {::mcp/handlers {:resources (lookup/lookup-map false)}})
-          result (wrapped-handler session {:uri "file:///nonexistent.txt"})]
+          result (wrapped-handler session {} {:uri "file:///nonexistent.txt"})]
       (is (match? {:code -32002
                    :message "Resource Not Found"
                    :data "file:///nonexistent.txt"}

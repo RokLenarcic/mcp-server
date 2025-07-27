@@ -495,20 +495,19 @@ When the client cancels a request to your server (like a tool call), your handle
 
 ```clojure
 (defn long-running-tool [exchange arguments]
-  (loop [i 0]
-    ;; Check if the client has cancelled this request
-    (if (core/is-cancelled? exchange)
-      ;; return is ignored
-      "ignored"
-      (do
-        ;; Do work...
-        (Thread/sleep 100)
-        (if (< i 100)
-          (recur (inc i))
-          "Work completed")))))
+  ;; cancel-future completes if client cancels a request, 
+  ;; with 'reason' String as value
+  (let [cancel-future (core/req-cancelled-future exchange)]
+    ;; has request been cancelled?
+    (.isDone cancel-future)
+    ;; non-blockingly return cancellation reason or nil if not-cancelled
+    (.getNow cancel-future nil)
+    ;; you can await cancellation
+    (.get cancel-future)
+    ;; or add an action
+    (.thenApply cancel-future (fn [reason] (println "Client cancelled:" reason)))))
 ```
-
-The client sends cancellation via "notifications/cancelled" messages, and your tools can check `(core/is-cancelled? exchange)` to detect when they should stop processing and return early.
+The return of a cancelled request handler are always ignored and won't be sent to the client.
 
 ## Logging
 
@@ -570,7 +569,9 @@ provides no tools for working with these tokens.
 
 The easiest way you can integrate your Authentication solution with this library is via the request meta.
 
-When using HTTP transport, the request meta that `RequestExchange` object provides, is the request map itself and 
-you can add your own Authentication logic to your handlers.
+This library provides a Ring handler. You can wrap handler with middleware to block all unauthorized requests to it.
+
+Within your handlers the request meta that `RequestExchange` object provides is the request map itself, and 
+you can add your own Authentication logic to your handlers. 
 
 Copyright (c) 2025 Rok Lenarčič

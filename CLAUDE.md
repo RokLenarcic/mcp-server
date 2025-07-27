@@ -76,6 +76,7 @@ clj -X:examples
 - Error handling uses JSON-RPC error objects with specific error codes
 - The library uses clojure.tools.logging for internal logging
 - Session modifications (adding/removing tools, prompts, etc.) automatically notify clients
+- Cancellation is handled via `req-cancelled-future` which returns a CompletableFuture that completes with the cancellation reason
 
 ## Common Patterns
 

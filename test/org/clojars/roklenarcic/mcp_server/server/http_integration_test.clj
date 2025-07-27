@@ -12,7 +12,7 @@
             [org.clojars.roklenarcic.mcp-server.resource.lookup :as lookup]
             [matcher-combinators.test]))
 
-(def test-port 8090)
+(def test-port 8091)
 (def base-url (str "http://localhost:" test-port))
 
 (defn create-test-session []

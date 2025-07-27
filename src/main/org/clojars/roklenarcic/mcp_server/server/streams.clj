@@ -74,6 +74,9 @@
                             ((::mcp/send-to-client @session) json-response)))))
               (recur))
           (do (log/info "EOF reached, stopping server")
+              (while (seq (::mcp/in-flight @session))
+                (Thread/sleep 400)
+                (log/infof "Awaiting %d outstanding requests %s" (count (::mcp/in-flight @session)) (::mcp/in-flight @session)))
               (swap! session dissoc ::mcp/os))))
       (catch InterruptedException _
         (log/info "Stream server interrupted, stopping...")))))

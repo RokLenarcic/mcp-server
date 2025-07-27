@@ -5,7 +5,8 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [matcher-combinators.test]
             [matcher-combinators.matchers :as m])
-  (:import (java.io ByteArrayInputStream)))
+  (:import (java.io ByteArrayInputStream)
+           (java.util.concurrent CompletableFuture)))
 
 (deftest resource-desc-test
   (testing "Basic resource description creation"
@@ -300,7 +301,6 @@
       (is (satisfies? p/ToolErrorResponse error))
       (is (= content (p/-err-contents error))))))
 
-
 (deftest request-exchange-test
   (testing "Progress reporting functionality"
     (let [progress-calls (atom [])
@@ -315,24 +315,24 @@
                           (sampling [this req progress-callback] nil)
                           (report-progress [this msg]
                             (swap! progress-calls conj msg))
-                          (is-cancelled? [this] false))]
-      
+                          (req-cancelled-future [this] (CompletableFuture/completedFuture nil)))]
+
       (testing "Basic progress reporting"
         (c/report-progress mock-exchange {:progress 50 :total 100 :message "Processing..."})
         (is (= 1 (count @progress-calls)))
         (is (= {:progress 50 :total 100 :message "Processing..."} (first @progress-calls))))
-      
+
       (testing "Multiple progress reports"
         (reset! progress-calls [])
         (c/report-progress mock-exchange {:progress 25 :total 100 :message "Starting..."})
         (c/report-progress mock-exchange {:progress 75 :total 100 :message "Almost done..."})
         (c/report-progress mock-exchange {:progress 100 :total 100 :message "Completed!"})
-        
+
         (is (= 3 (count @progress-calls)))
         (is (= {:progress 25 :total 100 :message "Starting..."} (first @progress-calls)))
         (is (= {:progress 75 :total 100 :message "Almost done..."} (second @progress-calls)))
         (is (= {:progress 100 :total 100 :message "Completed!"} (last @progress-calls))))
-      
+
       (testing "Progress with minimal data"
         (reset! progress-calls [])
         (c/report-progress mock-exchange {:message "Simple update"})
@@ -341,7 +341,7 @@
 
 (deftest request-cancellation-test
   (testing "Request cancellation functionality"
-    (let [cancelled-state (atom false)
+    (let [cancelled-future (atom (CompletableFuture/completedFuture nil))
           mock-exchange (reify c/RequestExchange
                           (req-meta [this] nil)
                           (client-spec [this] {:info {} :capabilities {}})
@@ -352,14 +352,19 @@
                           (sampling [this req] nil)
                           (sampling [this req progress-callback] nil)
                           (report-progress [this msg] false)
-                          (is-cancelled? [this] @cancelled-state))]
-      
+                          (req-cancelled-future [this] @cancelled-future))]
+
       (testing "Initially not cancelled"
-        (is (false? (c/is-cancelled? mock-exchange))))
-      
-      (testing "Can be cancelled"
-        (reset! cancelled-state true)
-        (is (true? (c/is-cancelled? mock-exchange)))))))
+        (let [future (c/req-cancelled-future mock-exchange)]
+          (is (.isDone future))
+          (is (nil? (.get future)))))
+
+      (testing "Can be cancelled with reason"
+        (let [cancelled-with-reason (CompletableFuture/completedFuture "User requested cancellation")]
+          (reset! cancelled-future cancelled-with-reason)
+          (let [future (c/req-cancelled-future mock-exchange)]
+            (is (.isDone future))
+            (is (= "User requested cancellation" (.get future)))))))))
 
 (deftest edge-cases-test
   (testing "Empty collections and nil values"
@@ -369,11 +374,11 @@
       (is (= [] (:values empty-completion)))
       (is (= 0 (:total empty-completion)))
       (is (false? (:hasMore empty-completion)))
-      
+
       (is (= [] (:hints empty-prefs)))
       (is (nil? (:intelligence-priority empty-prefs)))
       (is (nil? (:speed-priority empty-prefs)))
-      
+
       (is (= [] (:messages empty-sampling)))
       (is (nil? (:model-preferences empty-sampling)))))
 

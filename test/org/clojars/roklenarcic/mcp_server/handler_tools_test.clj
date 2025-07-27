@@ -26,7 +26,7 @@
 (deftest tools-list-test
   (testing "List tools when none exist"
     (let [session (atom {})]
-      (is (= {:tools []} (tools/tools-list session {})))
+      (is (= {:tools []} (tools/tools-list session {} {})))
       (server/add-tool session sample-tool)
       (is (match? {:tools [{:description "A simple calculator tool"
                             :handler some?
@@ -42,7 +42,7 @@
                                                      "b"]
                                           :type "object"}
                             :name "calculator"}]}
-                  (tools/tools-list session {}))))))
+                  (tools/tools-list session {} {}))))))
 
 (deftest tools-call-test
   (testing "Call existing tool successfully"
@@ -51,17 +51,17 @@
       (is (= {:content [{:text "8"
                          :type "text"}]
               :isError false})
-          (tools/tools-call session {:name "calculator"
-                                     :arguments {:operation "add" :a 5 :b 3}}))
+          (tools/tools-call session {} {:name "calculator"
+                                        :arguments {:operation "add" :a 5 :b 3}}))
       (is (= {:content [{:text "Division by zero"
                          :type "text"}]
               :isError true}
-             (tools/tools-call session {:name "calculator"
-                                        :arguments {:operation "divide"
-                                                    :a 10
-                                                    :b 0}})))
+             (tools/tools-call session {} {:name "calculator"
+                                           :arguments {:operation "divide"
+                                                       :a 10
+                                                       :b 0}})))
       (is (match? {:code -32602 :message "Invalid Params" :data "Tool non-existent not found"}
-                  (tools/tools-call session {:name "non-existent" :arguments {}})))
+                  (tools/tools-call session {} {:name "non-existent" :arguments {}})))
       (server/add-tool session (server/tool "complex-tool"
                                             "Returns various content types"
                                             (server/obj-schema "No params" {} [])
@@ -81,4 +81,4 @@
                         {:text "Simple string"
                          :type "text"}]
               :isError false}
-             (tools/tools-call session {:name "complex-tool" :arguments {}}))))))
+             (tools/tools-call session {} {:name "complex-tool" :arguments {}}))))))

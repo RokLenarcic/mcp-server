@@ -24,12 +24,12 @@
 (deftest prompts-list-test
   (testing "List prompts when none exist"
     (let [session (atom {::mcp/handlers {:prompts {}}})
-          result (prompts/prompts-list session {})]
+          result (prompts/prompts-list session {} {})]
       (is (match? {:prompts []} result))))
 
   (testing "List prompts with one prompt"
     (let [session (atom {::mcp/handlers {:prompts {"weather-prompt" (#'prompts/->prompt sample-prompt)}}})
-          result (prompts/prompts-list session {})]
+          result (prompts/prompts-list session {} {})]
       (is (match? {:prompts [{:name "weather-prompt"
                               :description "Get weather information for a location"
                               :arguments [{:name :location
@@ -43,16 +43,16 @@
   (testing "List prompts with cursor"
     (let [session (atom {::mcp/handlers {:prompts {"prompt1" sample-prompt
                                                    "prompt2" sample-prompt}}})
-          result (prompts/prompts-list session {:cursor "page-2"})]
+          result (prompts/prompts-list session {} {:cursor "page-2"})]
       (is (match? {:prompts vector?} result)))))
 
 (deftest prompts-get-test
   (testing "Get existing prompt"
     (let [session (atom {::mcp/handlers {:prompts {"weather-prompt" sample-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "weather-prompt"
-                                               :arguments {:location "New York"
-                                                           :units "celsius"}})]
+          result (prompts/prompts-get session {} {:name "weather-prompt"
+                                                  :arguments {:location "New York"
+                                                              :units "celsius"}})]
       (is (match? {:description "Weather for New York"
                    :messages [{:content {:text "It's sunny in New York (units: celsius)"
                                          :type "text"}}]}
@@ -61,8 +61,8 @@
   (testing "Get prompt with only required arguments"
     (let [session (atom {::mcp/handlers {:prompts {"weather-prompt" sample-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "weather-prompt"
-                                               :arguments {:location "London"}})]
+          result (prompts/prompts-get session {} {:name "weather-prompt"
+                                                  :arguments {:location "London"}})]
       (is (match? {:description "Weather for London"
                    :messages [{:content {:text "It's sunny in London"
                                          :type "text"}}]}
@@ -71,8 +71,8 @@
   (testing "Get non-existent prompt"
     (let [session (atom {::mcp/handlers {:prompts {}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "non-existent"
-                                               :arguments {}})]
+          result (prompts/prompts-get session {} {:name "non-existent"
+                                                  :arguments {}})]
       (is (match? {:code -32602
                    :message "Invalid Params"
                    :data "Prompt non-existent not found"}
@@ -97,15 +97,15 @@
       ;; Should succeed with required parameter
       (is (match? {:description "Complex response"
                    :messages vector?}
-                  (prompts/prompts-get session {:name "complex-prompt"
-                                                :arguments {:required-param "test"}})))
+                  (prompts/prompts-get session {} {:name "complex-prompt"
+                                                   :arguments {:required-param "test"}})))
       
       ;; Should succeed with both required and optional
       (is (match? {:description "Complex response"
                    :messages vector?}
-                  (prompts/prompts-get session {:name "complex-prompt"
-                                                :arguments {:required-param "test"
-                                                            :optional-param "optional-value"}})))))
+                  (prompts/prompts-get session {} {:name "complex-prompt"
+                                                   :arguments {:required-param "test"
+                                                               :optional-param "optional-value"}})))))
 
   (testing "Prompt argument list structure"
     (let [session (atom {::mcp/handlers {:prompts {"complex-prompt"
@@ -115,7 +115,7 @@
                                                                     {:req1 "Required 1" :req2 "Required 2"}
                                                                     {:opt1 "Optional 1" :opt2 "Optional 2"}
                                                                     (fn [e a] (c/prompt-resp "test" []))))}}})
-          result (prompts/prompts-list session {})]
+          result (prompts/prompts-list session {} {})]
       (is (= {:prompts [{:arguments [{:description "Required 1"
                                       :name :req1
                                       :required true}
@@ -147,7 +147,7 @@
                                           (c/audio-content (byte-array [4 5 6]) "audio/mp3")])))
           session (atom {::mcp/handlers {:prompts {"rich-prompt" rich-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "rich-prompt"
+          result (prompts/prompts-get session {} {:name "rich-prompt"
                                                :arguments {}})]
       (is (match? {:description "Rich content response"
                    :messages [{:content {:type "text"}}
@@ -167,7 +167,7 @@
                                              [(c/embedded-content "JSON data" 1.0 :user)])))
           session (atom {::mcp/handlers {:prompts {"resource-prompt" resource-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "resource-prompt"
+          result (prompts/prompts-get session {} {:name "resource-prompt"
                                                :arguments {}})]
       (is (match? {:description "Resource response"
                    :messages [{:content {:type "resource"}}]}
@@ -177,7 +177,7 @@
   (testing "Missing name parameter"
     (let [session (atom {::mcp/handlers {:prompts {"test" sample-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:arguments {}})]
+          result (prompts/prompts-get session {} {:arguments {}})]
       (is (match? {:code -32602
                    :message "Invalid Params"}
                   result))))
@@ -190,8 +190,8 @@
                                         (fn [exchange arguments] "not-a-prompt-response"))
           session (atom {::mcp/handlers {:prompts {"invalid-prompt" invalid-prompt}}
                          ::mcp/initialized? true})
-          result (prompts/prompts-get session {:name "invalid-prompt"
-                                               :arguments {}})]
+          result (prompts/prompts-get session {} {:name "invalid-prompt"
+                                                  :arguments {}})]
       ;; Should handle gracefully - the result might be a description with messages
       (is (or (contains? result :code)
               (contains? result :description))))))

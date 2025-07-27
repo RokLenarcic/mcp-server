@@ -57,7 +57,7 @@
              (str %))
           (if (sequential? roles) roles [roles]))))
 
-(defn base64-encode 
+(defn base64-encode
   "Encodes binary content to base64 string.
    
    Parameters:
@@ -72,7 +72,7 @@
             (io/copy c out)
             (base64-encode (.toByteArray out)))))
 
-(defn proto->resource 
+(defn proto->resource
   "Converts a protocol resource object to MCP wire format.
    
    Parameters:
@@ -98,7 +98,7 @@
           (log/error "Cannot convert resource body of type:" (class body))
           (throw (ex-info (format "Cannot convert %s to a resource" (class body)) {})))))))
 
-(defn proto->content 
+(defn proto->content
   "Converts a protocol content object to MCP wire format.
    
    Parameters:
@@ -136,7 +136,7 @@
                                                 :annotations annotations
                                                 :resource (proto->resource nil o)))))
 
-(defn ->content-vector 
+(defn ->content-vector
   "Converts content objects to a vector of MCP content format.
    
    Parameters:
@@ -150,7 +150,7 @@
     (sequential? o) (mapv proto->content o)
     :else (->content-vector [o])))
 
-(defn proto->message 
+(defn proto->message
   "Converts a protocol message object to MCP wire format.
    
    Parameters:
@@ -182,39 +182,44 @@
   [rpc-session progress-callback]
   (log/trace "Requesting root list from client")
   (.thenApply
-    ^CompletableFuture (send-request rpc-session "roots/list" nil progress-callback)
-    (fn [{:keys [roots]}]
-      (log/debug "Received roots response - count:" (if (map? roots) 1 (count roots)))
-      (if (map? roots) [roots] (vec roots)))))
+   ^CompletableFuture (send-request rpc-session "roots/list" nil progress-callback)
+   (fn [{:keys [roots]}]
+     (log/debug "Received roots response - count:" (if (map? roots) 1 (count roots)))
+     (if (map? roots) [roots] (vec roots)))))
 
 (def handle-changed-root
   "Handler for root change notifications from the client."
   (wrap-check-init
-    (fn [rpc-session req-meta params]
-      (log/debug "Client reported root directory changes")
-      (when-let [cb (-> @rpc-session ::mcp/handlers :roots-changed-callback)]
-        (cb (create-req-session rpc-session req-meta params)))
-      (swap! rpc-session dissoc ::mcp/roots)
-      nil)))
+   (fn [rpc-session req-meta params]
+     (log/debug "Client reported root directory changes")
+     (when-let [cb (-> @rpc-session ::mcp/handlers :roots-changed-callback)]
+       (cb (create-req-session rpc-session req-meta params)))
+     (swap! rpc-session dissoc ::mcp/roots)
+     nil)))
 
 (def handle-progress
   "Handler for progress notification from the client."
   (wrap-check-init
-    (fn [rpc-session req-meta params]
-      (log/debug "Client reported progress")
-      (when-let [token (:progressToken params)]
-        (when-let [cb (.get client-progress token)]
-          (cb params)))
-      nil)))
+   (fn [rpc-session req-meta params]
+     (log/debug "Client reported progress")
+     (when-let [token (:progressToken params)]
+       (when-let [cb (.get client-progress token)]
+         (cb params)))
+     nil)))
 
 (def handle-request-cancelled
   (wrap-check-init
-    (fn [rpc-session req-meta {:keys [requestId reason]}]
-      (log/infof "Request %s cancelled: %s" requestId reason)
-      (rpc/update-inflight rpc-session disj requestId)
-      nil)))
+   (fn [rpc-session req-meta {:keys [requestId reason]}]
+     (log/infof "Request %s cancelled: %s" requestId reason)
+     (rpc/update-inflight rpc-session
+                          (fn [in-flight id]
+                            (when-let [^CompletableFuture fut (get in-flight id)]
+                              (.complete fut reason))
+                            (dissoc in-flight id))
+                          requestId)
+     nil)))
 
-(defn list-roots 
+(defn list-roots
   "Lists the client's root directories, using caching when appropriate.
    
    Parameters:
@@ -240,7 +245,7 @@
         (log/trace "Client doesn't support roots capability, returning empty list")
         (CompletableFuture/completedFuture [])))))
 
-(defn do-sampling 
+(defn do-sampling
   "Requests the client to perform LLM sampling/completion.
    
    Parameters:
@@ -287,7 +292,7 @@
   (log/debugf "Notifying progress on token %s: %s" progress-token msg)
   (rpc/send-notification rpc-session "notifications/progress" (assoc msg :progressToken progress-token)))
 
-(defn create-req-session 
+(defn create-req-session
   "Creates a RequestExchange object from a session atom.
    
    Parameters:
@@ -316,7 +321,6 @@
       (let [progress-token (get-in params [:_meta :progressToken])]
         (when progress-token (notify-progress rpc-session progress-token msg))
         (some? progress-token)))
-    (is-cancelled? [this]
-      (if-let [id (-> req-meta ::mcp/request-id)]
-        (-> @rpc-session ::mcp/in-flight (contains? id) not)
-        false))))
+    (req-cancelled-future [this]
+      (or (-> @rpc-session ::mcp/in-flight (get (-> req-meta ::mcp/request-id)))
+          (CompletableFuture/completedFuture nil)))))
