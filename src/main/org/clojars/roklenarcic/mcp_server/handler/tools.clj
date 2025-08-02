@@ -41,7 +41,7 @@
   (log/debug "Client requested tool list")
   (let [tools (or (-> @rpc-session ::mcp/handlers :tools vals) [])]
     (log/trace "Returning" (count tools) "tools:" (mapv :name tools))
-    {:tools tools}))
+    {:tools (mapv #(dissoc % :handler) tools)}))
 
 (defn tools-call 
   "Handles tools/call requests from the client.

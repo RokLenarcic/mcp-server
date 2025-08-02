@@ -5,7 +5,9 @@
             [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.handler.init :as init]
+    #_[org.clojars.roklenarcic.mcp-server.json.charred :as charred]
             [org.clojars.roklenarcic.mcp-server.json.charred :as charred]
+            [org.clojars.roklenarcic.mcp-server.json.cheshire :as cheshire]
             [org.clojars.roklenarcic.mcp-server.server :as server]
             [org.clojars.roklenarcic.mcp-server.server.streams :as streams])
   (:import (clojure.lang IFn)
@@ -60,7 +62,8 @@
         out (PipedInputStream. os2)
         s (streams/create-session (server/make-session
                                     (server/server-info "Test MCP Server" "1.0.0" "Instructions on how to use this server" true)
-                                    (charred/serde {})
+                                    ;(charred/serde {})
+                                    (cheshire/serde {})
                                     {})
                                   os2)
         stdin (io/writer os)
