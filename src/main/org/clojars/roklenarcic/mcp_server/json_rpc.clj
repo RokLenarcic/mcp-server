@@ -80,10 +80,6 @@
       (apply update context ::mcp/in-flight (fnil f {}) id args)))
   nil)
 
-(defn do-respond? [context id]
-  (when-let [^CompletableFuture fut (get (::mcp/in-flight (if (instance? IAtom context) @context context)) id)]
-    (not (.isDone fut))))
-
 (defn make-error-response
   "Creates a JSON-RPC error response map.
    
@@ -239,8 +235,8 @@
     (case item-type
       :error {:jsonrpc "2.0" :error error :id id}
       (try
-        (let [_ (update-inflight context assoc id (CompletableFuture.))
-              handler (get dispatch-table method (method-not-found-handler method))
+        (update-inflight context assoc id (CompletableFuture.))
+        (let [handler (get dispatch-table method (method-not-found-handler method))
               result (handler context (?assoc req-meta ::mcp/request-id id) params)]
           (if (instance? CompletableFuture result)
             (-> ^CompletableFuture result

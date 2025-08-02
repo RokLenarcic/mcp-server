@@ -398,7 +398,7 @@
    Parameters:
    - name: tool name (string)
    - description: tool description (string)
-   - input-schema: JSON schema object describing the tool's input parameters
+   - input-schema: object JSON schema describing the tool's input parameters
    - handler: tool handler function (fn [exchange params] ...)
    
    JSON Schema supports the following types and constraints:
@@ -415,7 +415,7 @@
    Type Combinations:
    - anyOf: Value must match one of several schemas
    - oneOf: Value must match exactly one of several schemas
-   - allOf: Value must match all of the specified schemas
+   - allOf: Value must match all the specified schemas
    
    String Constraints:
    - enum: Restrict to specific allowed values
