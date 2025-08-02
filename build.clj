@@ -32,11 +32,16 @@
 (defn test "Run the tests." [opts]
       (run-tests (create-opts opts [:test])))
 
+(defn- copy-sources [opts]
+       (b/copy-dir {:src-dirs (into (:src-dirs opts) (:resource-dirs opts))
+                    :target-dir (:class-dir opts)}))
+
 (defn ci "Run the CI pipeline of tests (and build the JAR)." [opts]
       (test opts)
       (-> (create-opts opts [])
           (clean)
-          (doto (b/write-pom))
+          (doto (b/write-pom)
+                (copy-sources))
           (b/jar)))
 
 (defn install "Install the JAR locally." [opts]
