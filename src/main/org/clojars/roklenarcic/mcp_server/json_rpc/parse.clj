@@ -149,7 +149,7 @@
 
    Returns a Parsed record, vector of Parsed records, or an error."
   [parsed-json]
-  (if (vector? parsed-json)
+  (if (sequential? parsed-json)
     (if (empty? parsed-json)
       (invalid-request nil)
       (vec (keep parse-request parsed-json)))

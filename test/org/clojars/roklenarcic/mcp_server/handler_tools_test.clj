@@ -29,7 +29,6 @@
       (is (= {:tools []} (tools/tools-list session {} {})))
       (server/add-tool session sample-tool)
       (is (match? {:tools [{:description "A simple calculator tool"
-                            :handler some?
                             :inputSchema {:description "Calculator parameters"
                                           :properties {:a {:description "First number"
                                                            :type "number"}

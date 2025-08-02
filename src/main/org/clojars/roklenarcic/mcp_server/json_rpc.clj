@@ -195,7 +195,7 @@
    
    Returns nil (this is a notification handler)."
   [_ _ {:keys [error result id] :as params}]
-  (when-let [^CompletableFuture cb (and params id (.remove client-req-pending id))]
+  (when-let [^CompletableFuture cb (and params id (.remove client-req-pending (long id)))]
     (log/debug "Handling client response for id:" id "error:" (some? error))
     (if-let [{:keys [code message data]} error]
       (do
