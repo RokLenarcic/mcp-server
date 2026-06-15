@@ -466,11 +466,31 @@
              "result" {"completion" {"hasMore" false
                                      "total" 2
                                      "values" ["AAAA" "CCC"]}}}
-            {"result" {"completion" {"hasMore" false
-                                     "total" 4
-                                     "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}}
-             "id" int?
-             "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout)))))))
+             {"result" {"completion" {"hasMore" false
+                                      "total" 4
+                                      "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}}
+              "id" int?
+              "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout))))))
+  (testing "Completion request forwards :context to handler via core/completion-context"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          captured (atom [])]
+      (test-in/initialize s)
+      (server/add-completion server "ref/prompt" "ctx-prompt"
+                             (fn [exchange _name _value]
+                               (swap! captured conj (c/completion-context exchange))
+                               (c/completion-resp ["X"])))
+      (test-in/print-req stdin "completion/complete"
+                         {:ref {:type "ref/prompt" :name "ctx-prompt"}
+                          :argument {:name "arg2" :value "v2"}
+                          :context {:arguments {:arg1 "v1"}}})
+      (test-in/print-req stdin "completion/complete"
+                         {:ref {:type "ref/prompt" :name "ctx-prompt"}
+                          :argument {:name "arg1" :value "v1"}})
+      (.close stdin)
+      (is (match? [{"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}
+                   {"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}]
+                  (mapv json/read-json (line-seq stdout))))
+      (is (= [{:arguments {:arg1 "v1"}} nil] @captured)))))
 
 ;; List roots test
 (deftest list-roots-test

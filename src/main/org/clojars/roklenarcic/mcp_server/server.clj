@@ -139,13 +139,15 @@
 
 (defn add-completion
   "Adds a completion handler to a session.
-   
+
    Parameters:
    - session: the session atom
    - ref-type: type of reference (e.g., \"resource\", \"prompt\", \"tool\")
    - ref-name: name of the specific reference
-   - handler: completion handler function (fn [exchange name value] core/completion-resp)
-   
+   - handler: completion handler function (fn [exchange name value] core/completion-resp).
+     Use core/completion-context with the exchange to read previously
+     resolved arguments from the client.
+
    Returns the updated session atom."
   [session ref-type ref-name handler]
   (log/info "Adding completion handler for" ref-type ref-name)
@@ -169,12 +171,14 @@
 (defn set-completion-handler
   "Sets (or unsets if nil) a general completion handler that is called if there are no
    specific completion handlers that match.
-   
+
    Parameters:
    - session: the session atom
-   - handler: general completion handler function (fn [exchange ref-type ref-name name value] core/completion-resp)
-              or nil to unset
-   
+   - handler: general completion handler function
+              (fn [exchange ref-type ref-name name value] core/completion-resp)
+              or nil to unset. Use core/completion-context with the exchange
+              to read previously resolved arguments from the client.
+
    Returns the session atom."
   [session handler]
   (if handler
