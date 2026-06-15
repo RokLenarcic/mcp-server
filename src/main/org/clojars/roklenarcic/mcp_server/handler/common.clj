@@ -320,39 +320,43 @@
 
 (defn create-req-session
   "Creates a RequestExchange object from a session atom.
-   
+
    Parameters:
    - rpc-session: the session atom
    - req-meta: request metadata, including at least ::mcp/request-id if available
-   
+   - params: the parsed request params; if it carries an :_meta map, it
+     is exposed verbatim under ::mcp/request-_meta in req-meta so handlers
+     can read it via core/request-_meta.
+
    Returns a RequestExchange object that handlers can use to interact with the client."
   [rpc-session req-meta params]
-  (reify c/RequestExchange
-    (req-meta [this] req-meta)
-    (client-spec [this]
-      (let [{::mcp/keys [client-info client-capabilities]} @rpc-session]
-        {:info client-info :capabilities client-capabilities}))
-    (get-session [this] rpc-session)
-    (log-msg [this level logger msg data]
-      (h.logging/do-log rpc-session level logger msg data))
-    (list-roots [this] (list-roots rpc-session nil))
-    (list-roots [this progress-callback] (list-roots rpc-session progress-callback))
-    (sampling [this req]
-      (when (-> @rpc-session ::mcp/client-capabilities :sampling)
-        (do-sampling rpc-session req nil)))
-    (sampling [this req progress-callback]
-      (when (-> @rpc-session ::mcp/client-capabilities :sampling)
-        (do-sampling rpc-session req progress-callback)))
-    (elicitation [this message json-schema]
-      (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
-        (do-elicitation rpc-session message json-schema nil)))
-    (elicitation [this message json-schema progress-callback]
-      (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
-        (do-elicitation rpc-session message json-schema progress-callback)))
-    (report-progress [this msg]
-      (let [progress-token (get-in params [:_meta :progressToken])]
-        (when progress-token (notify-progress rpc-session progress-token msg))
-        (some? progress-token)))
-    (req-cancelled-future [this]
-      (or (-> @rpc-session ::mcp/in-flight (get (-> req-meta ::mcp/request-id)))
-          (CompletableFuture/completedFuture nil)))))
+  (let [req-meta (?assoc req-meta ::mcp/request-_meta (:_meta params))]
+    (reify c/RequestExchange
+      (req-meta [this] req-meta)
+      (client-spec [this]
+        (let [{::mcp/keys [client-info client-capabilities]} @rpc-session]
+          {:info client-info :capabilities client-capabilities}))
+      (get-session [this] rpc-session)
+      (log-msg [this level logger msg data]
+        (h.logging/do-log rpc-session level logger msg data))
+      (list-roots [this] (list-roots rpc-session nil))
+      (list-roots [this progress-callback] (list-roots rpc-session progress-callback))
+      (sampling [this req]
+        (when (-> @rpc-session ::mcp/client-capabilities :sampling)
+          (do-sampling rpc-session req nil)))
+      (sampling [this req progress-callback]
+        (when (-> @rpc-session ::mcp/client-capabilities :sampling)
+          (do-sampling rpc-session req progress-callback)))
+      (elicitation [this message json-schema]
+        (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
+          (do-elicitation rpc-session message json-schema nil)))
+      (elicitation [this message json-schema progress-callback]
+        (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
+          (do-elicitation rpc-session message json-schema progress-callback)))
+      (report-progress [this msg]
+        (let [progress-token (get-in params [:_meta :progressToken])]
+          (when progress-token (notify-progress rpc-session progress-token msg))
+          (some? progress-token)))
+      (req-cancelled-future [this]
+        (or (-> @rpc-session ::mcp/in-flight (get (-> req-meta ::mcp/request-id)))
+            (CompletableFuture/completedFuture nil))))))

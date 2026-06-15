@@ -306,6 +306,26 @@
   [exchange]
   (-> (req-meta exchange) ::mcp/completion-context))
 
+(defn request-_meta
+  "Returns the inbound :_meta map from the current MCP request, or nil if
+   the client did not include one (MCP 2025-06-18).
+
+   Per the MCP spec, every request can carry a top-level :_meta map. The
+   server preserves user-defined keys verbatim (no kebab→camelCase
+   transformation) so reverse-DNS or other custom-formatted identifiers
+   are exposed exactly as the client sent them.
+
+   Note: this is the request-level :_meta, not a result envelope. Use
+   tool-result, prompt-resp, etc. with their :_meta kwarg to attach
+   metadata on the way back out.
+
+   Parameters:
+   - exchange: the RequestExchange passed to any handler
+
+   Returns: the :_meta map verbatim, or nil if absent."
+  [exchange]
+  (-> (req-meta exchange) ::mcp/request-_meta))
+
 (defn tool-error
   "Create a tool error response.
    

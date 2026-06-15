@@ -614,7 +614,35 @@
       (is (match? [{"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}
                    {"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}]
                   (mapv json/read-json (line-seq stdout))))
-      (is (= [{:arguments {:arg1 "v1"}} nil] @captured)))))
+      (is (= [{:arguments {:arg1 "v1"}} nil] @captured))))
+  (testing "Inbound request :_meta is exposed to handlers via core/request-_meta verbatim"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          captured (atom [])
+          tool (server/tool "echo-meta"
+                            "Captures inbound :_meta"
+                            (server/obj-schema "Args" {} [])
+                            (fn [exchange _]
+                              (swap! captured conj (c/request-_meta exchange))
+                              "ok"))]
+      (server/add-tool server tool)
+      (test-in/initialize s)
+      ;; Call with custom :_meta (reverse-DNS keys must be preserved verbatim)
+      (test-in/print-req stdin "tools/call"
+                         {:name "echo-meta"
+                          :arguments {}
+                          :_meta {:com.example/trace-id "abc-123"
+                                  :other-key "v"}})
+      ;; Call without :_meta — request-_meta should return nil
+      (test-in/print-req stdin "tools/call"
+                         {:name "echo-meta"
+                          :arguments {}})
+      (.close stdin)
+      (is (match? [{"id" int? "jsonrpc" "2.0"
+                    "result" {"content" [{"type" "text" "text" "ok"}] "isError" false}}
+                   {"id" int? "jsonrpc" "2.0"
+                    "result" {"content" [{"type" "text" "text" "ok"}] "isError" false}}]
+                  (mapv json/read-json (line-seq stdout))))
+      (is (= [{:com.example/trace-id "abc-123" :other-key "v"} nil] @captured)))))
 
 ;; List roots test
 (deftest list-roots-test
