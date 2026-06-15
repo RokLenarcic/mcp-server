@@ -12,22 +12,36 @@
 
 (defn map->tool-message
   "Converts a tool execution result to MCP tool response format.
-   
+
    Parameters:
-   - resp: tool execution result (can be JSONRPCError, ToolErrorResponse, or content)
-   
-   Returns a map in MCP tool response format with :content and :isError keys."
+   - resp: tool execution result. May be a JSONRPCError, a ToolErrorResponse,
+     a ToolResult (structured + displayable content, MCP 2025-06-18), or any
+     content value (single content object, collection of content, string,
+     etc.).
+
+   Returns a map in MCP tool response format with :content, optional
+   :structuredContent, and :isError keys."
   [resp]
-  (if (instance? JSONRPCError resp)
+  (cond
+    (instance? JSONRPCError resp)
     (do (log/debug "Tool returned JSONRPCError - code:" (:code resp))
         resp)
-    (if (satisfies? p/ToolErrorResponse resp)
-      (do (log/debug "Tool returned error response")
-          {:content (common/->content-vector resp)
-           :isError true})
-      (do (log/debug "Tool returned normal response")
-          {:content (common/->content-vector resp)
-           :isError false}))))
+
+    (satisfies? p/ToolErrorResponse resp)
+    (do (log/debug "Tool returned error response")
+        {:content (common/->content-vector resp)
+         :isError true})
+
+    (satisfies? p/ToolResult resp)
+    (do (log/debug "Tool returned structured result")
+        {:content (common/->content-vector (p/-result-content resp))
+         :structuredContent (p/-result-structured resp)
+         :isError false})
+
+    :else
+    (do (log/debug "Tool returned normal response")
+        {:content (common/->content-vector resp)
+         :isError false})))
 
 (defn tools-list 
   "Handles tools/list requests from the client.

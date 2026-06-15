@@ -54,3 +54,12 @@
 (defprotocol ToolErrorResponse
   "Protocol for tool error responses."
   (-err-contents [this] "Returns the error content (one or more Content objects describing the error)."))
+
+(defprotocol ToolResult
+  "Protocol for tool results that include structured content (MCP 2025-06-18).
+
+   Used when a tool's :output-schema is defined and the handler wants to
+   return both displayable content and structured data conforming to the
+   schema. Created via core/tool-result."
+  (-result-content [this] "Returns the displayable content (Content protocol object(s) or collection).")
+  (-result-structured [this] "Returns the structured content map matching the tool's :output-schema."))

@@ -396,17 +396,25 @@
 
 (defn tool
   "Creates a tool specification for registration with the server.
-   
+
    A tool is a function that can be called by the client with structured parameters.
-   
+
    Parameters:
    - name: tool name (string)
    - description: tool description (string)
    - input-schema: object JSON schema describing the tool's input parameters
    - handler: tool handler function (fn [exchange params] ...)
-   
+
+   Optional keyword arguments (MCP 2025-06-18):
+   - :title - human-readable display name; clients SHOULD prefer it over name
+     when present
+   - :output-schema - object JSON Schema describing the structure of
+     :structuredContent the tool returns. When provided, handlers should
+     return values built with core/tool-result so the wire response carries
+     :structuredContent in addition to :content.
+
    JSON Schema supports the following types and constraints:
-   
+
    Basic Types:
    - string: Text values
    - number: Numeric values (integers and floats)
@@ -415,32 +423,34 @@
    - array: Lists of items
    - object: Complex structured data
    - null: Null values
-   
+
    Type Combinations:
    - anyOf: Value must match one of several schemas
    - oneOf: Value must match exactly one of several schemas
    - allOf: Value must match all the specified schemas
-   
+
    String Constraints:
    - enum: Restrict to specific allowed values
    - pattern: Regular expression validation
    - minLength/maxLength: String length constraints
    - format: Standard formats like \"email\", \"uri\", \"date-time\", etc.
-   
+
    Numeric Constraints:
    - minimum/maximum: Value bounds
    - exclusiveMinimum/exclusiveMaximum: Exclusive bounds
    - multipleOf: Must be multiple of specified number
-   
+
    Array Constraints:
    - items: Schema for array elements
    - minItems/maxItems: Array length constraints
    - uniqueItems: Whether items must be unique
-   
+
    Object Constraints:
    - properties: Define object properties
    - required: Specify required properties
    - additionalProperties: Control extra properties
    - patternProperties: Properties matching patterns"
-  [name description input-schema handler]
-  (map-of name description input-schema handler))
+  [name description input-schema handler & {:keys [title output-schema]}]
+  (?assoc (map-of name description input-schema handler)
+          :title title
+          :output-schema output-schema))

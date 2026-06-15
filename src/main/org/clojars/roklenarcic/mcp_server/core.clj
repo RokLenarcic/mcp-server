@@ -299,6 +299,21 @@
   (reify p/ToolErrorResponse
     (-err-contents [this] content)))
 
+(defn tool-result
+  "Create a tool result with both displayable content and structured content
+   (MCP 2025-06-18).
+
+   Use this when a tool's :output-schema is defined and the handler wants to
+   return data conforming to that schema in addition to displayable content.
+
+   Parameters:
+   - content: one content object or a collection of them (displayable side)
+   - structured-content: map conforming to the tool's :output-schema"
+  [content structured-content]
+  (reify p/ToolResult
+    (-result-content [this] content)
+    (-result-structured [this] structured-content)))
+
 (defn model-preferences
   "Create model preferences for a sampling request.
    

@@ -41,6 +41,25 @@
                                                      "b"]
                                           :type "object"}
                             :name "calculator"}]}
+                  (tools/tools-list session {} {})))))
+  (testing "Listed tools include :title and :outputSchema when provided"
+    (let [session (atom {})
+          out-schema {:type "object"
+                      :properties {:result {:type "number"}}
+                      :required ["result"]}]
+      (server/add-tool session
+                       (server/tool "structured-calc"
+                                    "Calculator with structured output"
+                                    (server/obj-schema "Args"
+                                                       {:a (server/num-schema "A")
+                                                        :b (server/num-schema "B")}
+                                                       ["a" "b"])
+                                    (fn [_ _] nil)
+                                    :title "Calculator (structured)"
+                                    :output-schema out-schema))
+      (is (match? {:tools [{:name "structured-calc"
+                            :title "Calculator (structured)"
+                            :outputSchema out-schema}]}
                   (tools/tools-list session {} {}))))))
 
 (deftest tools-call-test
@@ -99,4 +118,18 @@
                          :description "Top-level notes"
                          :mimeType "text/markdown"}]
               :isError false}
-             (tools/tools-call session {} {:name "link-tool" :arguments {}}))))))
+             (tools/tools-call session {} {:name "link-tool" :arguments {}})))
+      (server/add-tool session (server/tool "structured-tool"
+                                            "Returns structured + content"
+                                            (server/obj-schema "No params" {} [])
+                                            (fn [_ _]
+                                              (c/tool-result
+                                               [(c/text-content "Sum is 7")]
+                                               {:result 7 :note "added"}))
+                                            :output-schema {:type "object"
+                                                            :properties {:result {:type "number"}
+                                                                         :note {:type "string"}}}))
+      (is (= {:content [{:type "text" :text "Sum is 7"}]
+              :structuredContent {:result 7 :note "added"}
+              :isError false}
+             (tools/tools-call session {} {:name "structured-tool" :arguments {}}))))))

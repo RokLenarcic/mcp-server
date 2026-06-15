@@ -214,6 +214,21 @@
           error (c/tool-error [content1 content2])]
       (is (= [content1 content2] (p/-err-contents error))))))
 
+(deftest tool-result-test
+  (testing "Tool result exposes content and structured payload"
+    (let [content (c/text-content "Done")
+          structured {:answer 42 :note "ok"}
+          result (c/tool-result content structured)]
+      (is (= content (p/-result-content result)))
+      (is (= structured (p/-result-structured result)))))
+
+  (testing "Tool result with multiple content items"
+    (let [contents [(c/text-content "Step 1") (c/text-content "Step 2")]
+          structured {:steps 2}
+          result (c/tool-result contents structured)]
+      (is (= contents (p/-result-content result)))
+      (is (= structured (p/-result-structured result))))))
+
 (deftest model-preferences-test
   (testing "Basic model preferences"
     (let [prefs (c/model-preferences [{:name "gpt-4"} {:name "claude-3"}] nil nil)]
