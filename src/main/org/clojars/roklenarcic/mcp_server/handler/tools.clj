@@ -6,7 +6,7 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply]]
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply ?assoc]]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
@@ -20,7 +20,7 @@
      etc.).
 
    Returns a map in MCP tool response format with :content, optional
-   :structuredContent, and :isError keys."
+   :structuredContent, optional :_meta, and :isError keys."
   [resp]
   (cond
     (instance? JSONRPCError resp)
@@ -34,9 +34,10 @@
 
     (satisfies? p/ToolResult resp)
     (do (log/debug "Tool returned structured result")
-        {:content (common/->content-vector (p/-result-content resp))
-         :structuredContent (p/-result-structured resp)
-         :isError false})
+        (-> {:content (common/->content-vector (p/-result-content resp))
+             :structuredContent (p/-result-structured resp)
+             :isError false}
+            (?assoc :_meta (p/-result-meta resp))))
 
     :else
     (do (log/debug "Tool returned normal response")

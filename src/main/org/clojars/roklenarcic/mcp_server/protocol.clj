@@ -62,4 +62,5 @@
    return both displayable content and structured data conforming to the
    schema. Created via core/tool-result."
   (-result-content [this] "Returns the displayable content (Content protocol object(s) or collection).")
-  (-result-structured [this] "Returns the structured content map matching the tool's :output-schema."))
+  (-result-structured [this] "Returns the structured content map matching the tool's :output-schema.")
+  (-result-meta [this] "Returns the optional :_meta map to attach to the tool result envelope, or nil."))

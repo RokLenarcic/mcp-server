@@ -132,4 +132,21 @@
       (is (= {:content [{:type "text" :text "Sum is 7"}]
               :structuredContent {:result 7 :note "added"}
               :isError false}
-             (tools/tools-call session {} {:name "structured-tool" :arguments {}}))))))
+             (tools/tools-call session {} {:name "structured-tool" :arguments {}})))
+      (server/add-tool session (server/tool "meta-tool"
+                                            "Returns structured + _meta"
+                                            (server/obj-schema "No params" {} [])
+                                            (fn [_ _]
+                                              (c/tool-result
+                                               [(c/text-content "ok")]
+                                               {:result 42}
+                                               :_meta {:com.example/trace-id "abc-123"
+                                                       :other-key "v"}))
+                                            :output-schema {:type "object"
+                                                            :properties {:result {:type "number"}}}))
+      (is (= {:content [{:type "text" :text "ok"}]
+              :structuredContent {:result 42}
+              :isError false
+              :_meta {:com.example/trace-id "abc-123"
+                      :other-key "v"}}
+             (tools/tools-call session {} {:name "meta-tool" :arguments {}}))))))

@@ -317,11 +317,18 @@
 
    Parameters:
    - content: one content object or a collection of them (displayable side)
-   - structured-content: map conforming to the tool's :output-schema"
-  [content structured-content]
+   - structured-content: map conforming to the tool's :output-schema
+
+   Optional keyword arguments:
+   - :_meta - map of arbitrary metadata to attach to the tool result
+     envelope. Keys under :_meta are preserved verbatim on the wire (no
+     kebab→camelCase transformation); use this to attach reverse-DNS or
+     otherwise custom-formatted identifiers."
+  [content structured-content & {:keys [_meta]}]
   (reify p/ToolResult
     (-result-content [this] content)
-    (-result-structured [this] structured-content)))
+    (-result-structured [this] structured-content)
+    (-result-meta [this] _meta)))
 
 (defn model-preferences
   "Create model preferences for a sampling request.
