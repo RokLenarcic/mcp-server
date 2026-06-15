@@ -5,7 +5,18 @@
   (:require [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.core :as c]
-            [org.clojars.roklenarcic.mcp-server.handler.common :as common]))
+            [org.clojars.roklenarcic.mcp-server.handler.common :as common]
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
+  (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
+
+(defn completion-result
+  "Wraps a completion handler return value into the MCP wire format.
+
+   MCP requires the result to be shaped as {:completion {...}}.
+   JSONRPCError values are passed through unchanged so the caller
+   receives a proper error response."
+  [resp]
+  (if (instance? JSONRPCError resp) resp {:completion resp}))
 
 (defn do-completion
   "Processes a completion request by routing to the appropriate completion handler.
@@ -25,14 +36,16 @@
   [rpc-session req-meta {{:keys [name type]} :ref :keys [argument] :as params}]
   (log/trace "Processing completion request - type:" type "name:" name "argument:" (:name argument))
   (log/trace "Completion argument value:" (:value argument))
-  
+
   ;; Try specific completion handler first
   (if-let [handler (get-in @rpc-session [::mcp/handlers :completions [type name]])]
     (do (log/trace "Found specific completion handler for" type "/" name)
-        (handler (common/create-req-session rpc-session req-meta params) (:name argument) (:value argument)))
+        (-> (handler (common/create-req-session rpc-session req-meta params) (:name argument) (:value argument))
+            (papply completion-result)))
     (if-let [handler (get-in @rpc-session [::mcp/handlers :def-completion])]
       (do (log/trace "Using general completion handler for" type "/" name)
-          (handler (common/create-req-session rpc-session req-meta params) type name (:name argument) (:value argument)))
+          (-> (handler (common/create-req-session rpc-session req-meta params) type name (:name argument) (:value argument))
+              (papply completion-result)))
       (do (log/info "No completion handler found for" type "/" name)
           (log/trace "Available specific completions:" (keys (get-in @rpc-session [::mcp/handlers :completions])))
           (log/trace "General completion handler available:" (some? (get-in @rpc-session [::mcp/handlers :def-completion])))

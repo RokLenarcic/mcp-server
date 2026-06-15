@@ -110,8 +110,9 @@
       (log/debug "Invalid JSON-RPC version:" jsonrpc)
       (invalid-request "Wrong JSONRPC version" id))
 
-    ;; Check if this is a client response (has result or error with id)
-    (and id (or result error))
+    ;; Check if this is a client response (has result or error with id).
+    ;; Use contains? so falsey values like false/null are still recognised.
+    (and id (or (contains? msg :result) (contains? msg :error)))
     (do
       (log/trace "Detected client response message")
       (->notification :client-resp {:error error :result result :id id}))

@@ -138,11 +138,20 @@
       (is (= parse/INVALID_REQUEST (:code (:error parsed))))))
 
   (testing "Client response detection"
-    (let [response {:jsonrpc "2.0" :result {:success true} :id 123}
+    (are [result-val] (let [response {:jsonrpc "2.0" :result result-val :id 123}
+                            parsed (parse/parse-request response)]
+                        (and (= :notification (:item-type parsed))
+                             (= :client-resp (:method parsed))
+                             (= result-val (get-in parsed [:params :result]))))
+      {:success true}   ; truthy map result
+      false             ; falsey boolean result — was misclassified before fix
+      nil))             ; explicit null result — was misclassified before fix
+
+  (testing "Client error response detection"
+    (let [response {:jsonrpc "2.0" :error {:code -1 :message "oops"} :id 123}
           parsed (parse/parse-request response)]
       (is (= :notification (:item-type parsed)))
-      (is (= :client-resp (:method parsed)))
-      (is (= {:success true} (get-in parsed [:params :result]))))))
+      (is (= :client-resp (:method parsed))))))
 
 (deftest json-serialization-test
   (testing "Object serialization"

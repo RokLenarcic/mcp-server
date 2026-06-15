@@ -436,10 +436,9 @@
       (is (match?
            [{"id" int?
              "jsonrpc" "2.0"
-             "result" {"hasMore" false
-                       "total" 2
-                       "values" ["AAAA"
-                                 "CCC"]}}
+             "result" {"completion" {"hasMore" false
+                                     "total" 2
+                                     "values" ["AAAA" "CCC"]}}}
             {"error" {"code" -32602
                       "data" "Completion ref/prompt/unknown-prompt not found"
                       "message" "Invalid Params"}
@@ -464,13 +463,12 @@
       (is (match?
            [{"id" int?
              "jsonrpc" "2.0"
-             "result" {"hasMore" false
-                       "total" 2
-                       "values" ["AAAA"
-                                 "CCC"]}}
-            {"result" {"hasMore" false
-                       "total" 4
-                       "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}
+             "result" {"completion" {"hasMore" false
+                                     "total" 2
+                                     "values" ["AAAA" "CCC"]}}}
+            {"result" {"completion" {"hasMore" false
+                                     "total" 4
+                                     "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}}
              "id" int?
              "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout)))))))
 

@@ -22,6 +22,22 @@
    :emergency :fatal  ; System is unusable
    })
 
+(def level-severity
+  "Numeric severity for each MCP log level. Higher = more severe."
+  {:debug     0
+   :info      1
+   :notice    2
+   :warning   3
+   :error     4
+   :critical  5
+   :alert     6
+   :emergency 7})
+
+(defn loggable?
+  "Returns true when msg-level meets or exceeds threshold-level."
+  [threshold-level msg-level]
+  (>= (level-severity msg-level 0) (level-severity threshold-level 0)))
+
 (defn logging-set-level
   "Handles logging/setLevel requests from the client.
    
@@ -65,12 +81,13 @@
    - The message level meets or exceeds the configured threshold"
   [rpc-session level logger msg data]
   (log/logp (clj-logging-level level) logger msg (pr-str data))
-  (when-let [level (::mcp/logging-level @rpc-session)]
-    (log/debug "Forwarding log message to client - level:" level "logger:" logger)
-    (rpc/send-notification
-      rpc-session
-      "notifications/message"
-      {:level (name level)
-       :logger logger
-       :data {:error msg
-              :details data}})))
+  (when-let [threshold (::mcp/logging-level @rpc-session)]
+    (when (loggable? threshold level)
+      (log/debug "Forwarding log message to client - level:" level "logger:" logger)
+      (rpc/send-notification
+        rpc-session
+        "notifications/message"
+        {:level (name level)
+         :logger logger
+         :data {:message msg
+                :details data}}))))
