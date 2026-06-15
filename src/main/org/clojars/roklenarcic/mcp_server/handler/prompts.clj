@@ -6,7 +6,7 @@
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys]]
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
@@ -41,21 +41,25 @@
         (satisfies? p/ResourceResponse resp)) [resp]
     :else resp))
 
-(defn get-prompt-result 
+(defn get-prompt-result
   "Converts a prompt execution result to MCP wire format.
-   
+
    Parameters:
    - resp: prompt execution result (PromptResponse, JSONRPCError, or messages)
-   
-   Returns a map in MCP prompt response format with :description and :messages keys."
+
+   Returns a map in MCP prompt response format with :description, :messages,
+   and optional :_meta keys."
   [resp]
   (if (instance? JSONRPCError resp)
     resp
-    (let [description (when (satisfies? p/PromptResponse resp) (p/-prompt-desc resp))
+    (let [is-prompt-resp? (satisfies? p/PromptResponse resp)
+          description (when is-prompt-resp? (p/-prompt-desc resp))
+          _meta (when is-prompt-resp? (p/-prompt-meta resp))
           messages (->messages resp)]
       (log/trace "Creating prompt result with" (count messages) "messages")
-      {:description description
-       :messages (mapv common/proto->message messages)})))
+      (-> {:description description
+           :messages (mapv common/proto->message messages)}
+          (?assoc :_meta _meta)))))
 
 (defn prompts-list
   "Handles prompts/list requests from the client.

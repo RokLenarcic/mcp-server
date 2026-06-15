@@ -221,7 +221,21 @@
 
   (testing "Error response handling"
     (is (= (c/invalid-params "Test error")
-           (#'prompts/get-prompt-result (c/invalid-params "Test error"))))))
+           (#'prompts/get-prompt-result (c/invalid-params "Test error")))))
+
+  (testing ":_meta on prompt result envelope flows through verbatim"
+    (let [text-content (c/text-content "Hello" 1.0 :user)
+          resp (c/prompt-resp "Test" [text-content]
+                              :_meta {:com.example/trace-id "abc-123"
+                                      :other-key "v"})]
+      (is (= {:description "Test"
+              :messages [{:content {:annotations {:audience ["user"]
+                                                  :priority 1.0}
+                                    :text "Hello"
+                                    :type "text"}}]
+              :_meta {:com.example/trace-id "abc-123"
+                      :other-key "v"}}
+             (#'prompts/get-prompt-result resp))))))
 
 (deftest prompt-preprocessing-test
   (testing "Prompt preprocessing for API response"

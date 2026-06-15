@@ -44,7 +44,8 @@
 (defprotocol PromptResponse
   "Protocol for responses to prompt requests."
   (-prompt-desc [this] "Returns the description of the prompt response.")
-  (-prompt-msgs [this] "Returns the messages in the prompt response (vector of Message objects)."))
+  (-prompt-msgs [this] "Returns the messages in the prompt response (vector of Message objects).")
+  (-prompt-meta [this] "Returns the optional :_meta map to attach to the prompt result envelope, or nil."))
 
 (defprotocol Message
   "Protocol for messages in MCP conversations."

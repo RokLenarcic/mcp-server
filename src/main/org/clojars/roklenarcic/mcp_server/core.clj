@@ -255,16 +255,23 @@
 
 (defn prompt-resp
   "Create a prompt response with description and messages.
-   
+
    Parameters:
    - description: description of the prompt response
    - messages: one or more prompt messages (single messages are automatically wrapped into a vector)
-   
-   A message can be a core/Message, or just a core/Content object (which becomes a Message with nil role)."
-  [description messages]
+
+   A message can be a core/Message, or just a core/Content object (which becomes a Message with nil role).
+
+   Optional keyword arguments:
+   - :_meta - map of arbitrary metadata to attach to the prompt result
+     envelope. Keys under :_meta are preserved verbatim on the wire (no
+     kebab→camelCase transformation); use this to attach reverse-DNS or
+     otherwise custom-formatted identifiers."
+  [description messages & {:keys [_meta]}]
   (reify p/PromptResponse
     (-prompt-desc [this] description)
-    (-prompt-msgs [this] messages)))
+    (-prompt-msgs [this] messages)
+    (-prompt-meta [this] _meta)))
 
 (defn completion-resp
   "Create a completion response. Protocol limits responses to 100 items.
