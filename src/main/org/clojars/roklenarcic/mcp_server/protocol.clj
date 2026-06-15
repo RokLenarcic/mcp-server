@@ -65,3 +65,13 @@
   (-result-content [this] "Returns the displayable content (Content protocol object(s) or collection).")
   (-result-structured [this] "Returns the structured content map matching the tool's :output-schema.")
   (-result-meta [this] "Returns the optional :_meta map to attach to the tool result envelope, or nil."))
+
+(defprotocol ResourceReadResult
+  "Protocol for resources/read result envelopes that carry :_meta
+   (MCP 2025-06-18).
+
+   Use this only when you need to attach :_meta to a resources/read
+   response. For the common case, return a ResourceResponse (or a
+   collection of them) directly. Created via core/resource-read-result."
+  (-read-contents [this] "Returns the contents (one ResourceResponse or a collection of them).")
+  (-read-meta [this] "Returns the :_meta map to attach to the read-resource result envelope."))

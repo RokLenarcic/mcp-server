@@ -337,6 +337,26 @@
     (-result-structured [this] structured-content)
     (-result-meta [this] _meta)))
 
+(defn resource-read-result
+  "Create a resources/read result envelope that carries :_meta (MCP
+   2025-06-18).
+
+   Most resource handlers can return a ResourceResponse (or a collection
+   of them) directly. Use this wrapper only when you need to attach
+   metadata to the result envelope itself.
+
+   Parameters:
+   - contents: one ResourceResponse or a collection of them
+
+   Required keyword arguments:
+   - :_meta - map of arbitrary metadata to attach to the read-resource
+     envelope. Keys under :_meta are preserved verbatim on the wire (no
+     kebab→camelCase transformation)."
+  [contents & {:keys [_meta]}]
+  (reify p/ResourceReadResult
+    (-read-contents [this] contents)
+    (-read-meta [this] _meta)))
+
 (defn model-preferences
   "Create model preferences for a sampling request.
    

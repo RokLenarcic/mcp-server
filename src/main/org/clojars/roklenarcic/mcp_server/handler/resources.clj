@@ -9,7 +9,7 @@
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.resources :as res]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys]])
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (defn resources'
@@ -80,15 +80,26 @@
 
 (defn get-resource-result
   "Converts a resource read result to MCP wire format.
-   
+
    Parameters:
-   - resp: resource read result (ResourceResponse, collection, or JSONRPCError)
+   - resp: resource read result. May be a JSONRPCError, a
+     ResourceReadResult wrapper (carries :_meta), a ResourceResponse, or
+     a collection of ResourceResponse objects.
    - req-uri: the URI that was requested
-   
-   Returns a map in MCP resource response format with :contents key."
+
+   Returns a map in MCP resource response format with :contents and
+   optional :_meta keys."
   [resp req-uri]
-  (if (instance? JSONRPCError resp)
-    resp
+  (cond
+    (instance? JSONRPCError resp) resp
+
+    (satisfies? p/ResourceReadResult resp)
+    (let [contents (p/-read-contents resp)
+          contents (if (satisfies? p/ResourceResponse contents) [contents] contents)]
+      (-> {:contents (mapv (partial common/proto->resource req-uri) contents)}
+          (?assoc :_meta (p/-read-meta resp))))
+
+    :else
     {:contents (mapv (partial common/proto->resource req-uri)
                      (if (satisfies? p/ResourceResponse resp) [resp] resp))}))
 

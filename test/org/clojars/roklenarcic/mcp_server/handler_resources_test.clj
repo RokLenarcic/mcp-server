@@ -203,7 +203,44 @@
                               {:uri "file:///test.txt"
                                :text "Content 2"
                                :mimeType "text/plain"}]}
-                  result)))))
+                  result))))
+
+  (testing "ResourceReadResult wrapper attaches :_meta verbatim (single ResourceResponse)"
+    (let [wrapped (c/resource-read-result
+                    (c/resource "Hello, World!" "text/plain" nil)
+                    :_meta {:com.example/cache-id "abc-123"
+                            :other-key "v"})
+          result (#'resources/get-resource-result wrapped "file:///test.txt")]
+      (is (= {:contents [{:uri "file:///test.txt"
+                          :text "Hello, World!"
+                          :mimeType "text/plain"}]
+              :_meta {:com.example/cache-id "abc-123"
+                      :other-key "v"}}
+             result))))
+
+  (testing "ResourceReadResult wrapper accepts a collection"
+    (let [wrapped (c/resource-read-result
+                    [(c/resource "A" "text/plain" nil)
+                     (c/resource "B" "text/plain" nil)]
+                    :_meta {:trace "x"})
+          result (#'resources/get-resource-result wrapped "file:///test.txt")]
+      (is (= {:contents [{:uri "file:///test.txt"
+                          :text "A"
+                          :mimeType "text/plain"}
+                         {:uri "file:///test.txt"
+                          :text "B"
+                          :mimeType "text/plain"}]
+              :_meta {:trace "x"}}
+             result))))
+
+  (testing "ResourceReadResult wrapper without :_meta omits the key"
+    (let [wrapped (c/resource-read-result
+                    (c/resource "X" "text/plain" nil))
+          result (#'resources/get-resource-result wrapped "file:///test.txt")]
+      (is (= {:contents [{:uri "file:///test.txt"
+                          :text "X"
+                          :mimeType "text/plain"}]}
+             result)))))
 
 (deftest resources-helper-test
   (testing "Retrieve resources handler from session"
