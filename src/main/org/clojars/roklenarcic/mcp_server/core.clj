@@ -133,10 +133,14 @@
 
    Optional keyword arguments (MCP 2025-06-18):
    - :title - human-readable display name; clients SHOULD prefer it over name
-     when present"
-  [uri name description mime-type annotations & {:keys [title]}]
+     when present
+   - :_meta - map of arbitrary metadata to attach to this resource. Keys
+     under :_meta are preserved verbatim on the wire (no kebab→camelCase
+     transformation); use this to attach reverse-DNS or otherwise
+     custom-formatted identifiers."
+  [uri name description mime-type annotations & {:keys [title _meta]}]
   (-> (map-of uri name description mime-type annotations)
-      (?assoc :title title)))
+      (?assoc :title title :_meta _meta)))
 
 (defn audio-content
   "Create audio content for Tools and Prompts.

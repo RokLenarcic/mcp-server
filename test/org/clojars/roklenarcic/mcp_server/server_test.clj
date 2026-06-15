@@ -245,6 +245,76 @@
                                           "mimeType" "text/plain"}]}}
                   (json/read-json (first (line-seq stdout))))))))
 
+;; :_meta (MCP 2025-06-18) attached to spec items flows through the wire
+;; verbatim — keys inside :_meta must NOT be camelCased.
+(deftest meta-flows-to-wire-test
+  (testing "Tool :_meta flows through tools/list verbatim"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/add-tool server (server/tool "echo"
+                                           "Echo tool"
+                                           (server/obj-schema "P" {} [])
+                                           (fn [_ _] "ok")
+                                           :_meta {:com.example/tag-name "alpha"
+                                                   :keep-as-is 1
+                                                   :nested {:also-untouched "x"}}))
+      (test-in/initialize s)
+      (test-in/print-req stdin "tools/list" {})
+      (.close stdin)
+      (let [responses (mapv json/read-json (line-seq stdout))]
+        (is (match? (m/embeds [{"result"
+                                {"tools" [{"name" "echo"
+                                           "_meta" {"com.example/tag-name" "alpha"
+                                                    "keep-as-is" 1
+                                                    "nested" {"also-untouched" "x"}}}]}}])
+                    responses)))))
+
+  (testing "Prompt :_meta flows through prompts/list verbatim"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (test-in/initialize s)
+      (server/add-prompt server (server/prompt "named_prompt" "desc" {} {}
+                                               (fn [_ _] (c/prompt-resp "ok" "ok"))
+                                               :_meta {:com.example/owner "team-a"
+                                                       :keep-as-is true}))
+      (test-in/print-req stdin "prompts/list" {})
+      (.close stdin)
+      (let [responses (mapv json/read-json (line-seq stdout))]
+        (is (match? (m/embeds [{"result"
+                                {"prompts" [{"name" "named_prompt"
+                                             "_meta" {"com.example/owner" "team-a"
+                                                      "keep-as-is" true}}]}}])
+                    responses)))))
+
+  (testing "Resource :_meta flows through resources/list verbatim"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/set-resources-handler server (lookup/lookup-map true))
+      (lookup/add-resource server
+                           (c/resource-desc "file:///doc.txt" "doc" "Documentation" "text/plain" nil
+                                            :_meta {:com.example/source "wiki"
+                                                    :keep-as-is "v1"})
+                           (fn [_ _] "hello"))
+      (test-in/initialize s)
+      (test-in/print-req stdin "resources/list" {})
+      (.close stdin)
+      (is (match? {"result"
+                   {"resources" [{"uri" "file:///doc.txt"
+                                  "_meta" {"com.example/source" "wiki"
+                                           "keep-as-is" "v1"}}]}}
+                  (json/read-json (first (line-seq stdout)))))))
+
+  (testing "Resource template :_meta flows through resources/templates/list verbatim"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/add-resource-template server "file:///{name}.txt" "general_file" "General file" "text/plain"
+                                    nil :_meta {:com.example/family "filesystem"
+                                                :keep-as-is 99})
+      (test-in/initialize s)
+      (test-in/print-req stdin "resources/templates/list" {})
+      (.close stdin)
+      (is (match? {"result"
+                   {"resourceTemplates" [{"uriTemplate" "file:///{name}.txt"
+                                          "_meta" {"com.example/family" "filesystem"
+                                                   "keep-as-is" 99}}]}}
+                  (json/read-json (first (line-seq stdout))))))))
+
 ;; List prompts test
 (deftest list-prompts-test
   (testing "List prompts when none configured"

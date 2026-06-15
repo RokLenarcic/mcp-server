@@ -2,7 +2,7 @@
   "This namespace provides utility functions used throughout the MCP server
    implementation. It includes helper functions for functional programming,
    map manipulation, async operations, and naming conventions."
-  (:require [clojure.walk :refer [walk postwalk]])
+  (:require [clojure.walk :refer [walk]])
   (:import (java.util.concurrent CompletableFuture)))
 
 (defn- ->sym
@@ -18,8 +18,8 @@
   [form]
   (walk ->sym
         #(if (coll? %) (first (filter symbol? %)) (when (symbol? %) %))
-        (cond (and (list? form) (symbol? (first form))) (rest form)
-              (and (list? form) (keyword? (first form))) (symbol (name (first form)))
+        (cond (and (seq? form) (symbol? (first form))) (rest form)
+              (and (seq? form) (keyword? (first form))) (symbol (name (first form)))
               (map? form) (mapcat identity form)
               :else form)))
 
@@ -93,21 +93,36 @@
 
 (defn camelcase-keys
   "Recursively transforms all map keys from kebab-case to camelCase.
-   
+
    This function walks through nested data structures and converts all map keys
    from Clojure-style kebab-case to JavaScript-style camelCase. This is useful
    when preparing data for JSON serialization.
-   
+
+   Special case: the value under the `:_meta` key is left untouched (no key
+   transformation, no nested walk). The MCP spec treats `_meta` keys as
+   user-defined identifiers (often reverse-DNS or custom formats) and their
+   shape must be preserved on the wire.
+
    Parameters:
    - m: data structure to transform
-   
+
    Returns the data structure with all map keys converted to camelCase.
-   
+
    Examples:
    (camelcase-keys {:hello-world 1 :nested-map {:some-key 2}})
-   => {:helloWorld 1 :nestedMap {:someKey 2}}"
+   => {:helloWorld 1 :nestedMap {:someKey 2}}
+
+   (camelcase-keys {:_meta {:com.example/tag-name \"v\" :other-key 1}})
+   => {:_meta {:com.example/tag-name \"v\" :other-key 1}}"
   {:added "1.1"}
   [m]
-  (let [f (fn [[k v]] [(camelCaseKey k) v])]
-    ;; only apply to maps
-    (postwalk (fn [x] (if (map? x) (into {} (map f x)) x)) m)))
+  (cond
+    (map? m) (reduce-kv
+               (fn [acc k v]
+                 (let [k' (camelCaseKey k)]
+                   (assoc acc k' (if (= :_meta k') v (camelcase-keys v)))))
+               {}
+               m)
+    (vector? m) (mapv camelcase-keys m)
+    (sequential? m) (doall (map camelcase-keys m))
+    :else m))

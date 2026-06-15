@@ -111,14 +111,17 @@
    Optional keyword arguments (MCP 2025-06-18):
    - :title - human-readable display name; clients SHOULD prefer it over name
      when present
+   - :_meta - map of arbitrary metadata to attach to this template. Keys
+     under :_meta are preserved verbatim on the wire (no kebab→camelCase
+     transformation).
 
    Returns the session atom."
   ([session uri-template name description mime-type]
    (add-resource-template session uri-template name description mime-type nil))
-  ([session uri-template name description mime-type annotations & {:keys [title]}]
+  ([session uri-template name description mime-type annotations & {:keys [title _meta]}]
    (log/info "Adding resource template:" name "for URI template:" uri-template)
    (let [spec (-> (map-of uri-template name description mime-type annotations)
-                  (?assoc :title title))]
+                  (?assoc :title title :_meta _meta))]
      (swap! session update-in
             [::mcp/handlers :resource-templates]
             (fn [templates] (conj (or templates []) (h.resources/->resource-template spec)))))
@@ -314,10 +317,13 @@
 
    Optional keyword arguments (MCP 2025-06-18):
    - :title - human-readable display name; clients SHOULD prefer it over name
-     when present"
-  [name description required-args optional-args handler & {:keys [title]}]
+     when present
+   - :_meta - map of arbitrary metadata to attach to this prompt. Keys
+     under :_meta are preserved verbatim on the wire (no kebab→camelCase
+     transformation)."
+  [name description required-args optional-args handler & {:keys [title _meta]}]
   (-> (map-of name description required-args optional-args handler)
-      (?assoc :title title)))
+      (?assoc :title title :_meta _meta)))
 
 (defn str-schema
   "Creates a string JSON schema.
@@ -419,6 +425,9 @@
      :structuredContent the tool returns. When provided, handlers should
      return values built with core/tool-result so the wire response carries
      :structuredContent in addition to :content.
+   - :_meta - map of arbitrary metadata to attach to this tool. Keys
+     under :_meta are preserved verbatim on the wire (no kebab→camelCase
+     transformation).
 
    JSON Schema supports the following types and constraints:
 
@@ -457,7 +466,8 @@
    - required: Specify required properties
    - additionalProperties: Control extra properties
    - patternProperties: Properties matching patterns"
-  [name description input-schema handler & {:keys [title output-schema]}]
+  [name description input-schema handler & {:keys [title output-schema _meta]}]
   (?assoc (map-of name description input-schema handler)
           :title title
-          :output-schema output-schema))
+          :output-schema output-schema
+          :_meta _meta))

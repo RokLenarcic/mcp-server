@@ -202,3 +202,31 @@
     (let [result (util/pcatch "immediate" (fn [ex] "error"))]
       (is (= "immediate" result))
       (is (not (instance? CompletableFuture result))))))
+
+(deftest camelcase-keys-test
+  (testing "Top-level kebab keys become camelCase"
+    (is (= {:helloWorld 1 :nestedMap {:someKey 2}}
+           (util/camelcase-keys {:hello-world 1 :nested-map {:some-key 2}}))))
+
+  (testing "Vectors and lazy sequences are walked recursively"
+    (is (= {:items [{:fooBar 1} {:fooBar 2}]}
+           (util/camelcase-keys {:items [{:foo-bar 1} {:foo-bar 2}]}))))
+
+  (testing ":_meta key itself is preserved"
+    (is (contains? (util/camelcase-keys {:_meta {}}) :_meta)))
+
+  (testing ":_meta value subtree is preserved verbatim (no key transformation)"
+    (let [meta-payload {:com.example/tag-name "v"
+                        :reverse_dns_key 42
+                        :nested {:also-untouched "x"}
+                        :kebab-key 1}]
+      (is (= {:_meta meta-payload}
+             (util/camelcase-keys {:_meta meta-payload})))))
+
+  (testing "Sibling keys around :_meta still get camelCased"
+    (is (= {:fooBar 1 :_meta {:keep-as-is 2}}
+           (util/camelcase-keys {:foo-bar 1 :_meta {:keep-as-is 2}}))))
+
+  (testing "Nested :_meta subtree under a kebab parent stays verbatim"
+    (is (= {:outerKey {:_meta {:inner-key 1}}}
+           (util/camelcase-keys {:outer-key {:_meta {:inner-key 1}}})))))
