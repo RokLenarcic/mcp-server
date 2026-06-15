@@ -29,7 +29,10 @@ org.clojars.roklenarcic/mcp-server {:mvn/version "0.2.14"}
 - [Resources](#resources)
 - [Resource Templates](#resource-templates)
 - [Completions](#completions)
+- [Titles and Metadata](#titles-and-metadata)
 - [Client Communication](#client-communication)
+  - [Elicitation](#elicitation)
+  - [Request Metadata](#request-metadata)
 - [Logging](#logging)
 - [Middleware](#middleware)
 - [Errors](#errors)
@@ -285,6 +288,25 @@ Tools can be added or removed from both template sessions and live sessions. Whe
 ;; Client is automatically notified of changes
 ```
 
+`server/tool` accepts the following optional keyword arguments (MCP 2025-06-18):
+
+- `:title` — human-readable display name; clients SHOULD prefer it over `name`.
+- `:output-schema` — JSON Schema describing the structure of `:structuredContent`
+  the tool returns. See [Structured Tool Output](#structured-tool-output) below.
+- `:_meta` — map of arbitrary metadata to attach to the tool. Keys under
+  `:_meta` are preserved verbatim on the wire (no kebab→camelCase
+  transformation). See [Titles and Metadata](#titles-and-metadata).
+
+```clojure
+(server/tool
+  "get_current_weather"
+  "Reports current weather based on the location"
+  schema
+  get-weather
+  :title "Current Weather"
+  :_meta {"com.example/cost-tier" "premium"})
+```
+
 ### Tool Schemas
 
 Parameter schemas use standard JSON Schema format. The `server` namespace provides helper functions for common patterns:
@@ -348,11 +370,64 @@ Tools return one or more Content objects. You can return a single object or a co
 ["ABC" (byte-array [1])]
 ```
 
+Tool handlers can also return resource links — lightweight pointers to
+resources the client may fetch separately, instead of embedding the body
+inline:
+
+```clojure
+;; Minimal resource link
+(core/resource-link "file:///report.pdf" "report")
+
+;; With title, description, MIME type, priority and audience
+(core/resource-link "file:///report.pdf" "report"
+                    :title "Q4 Report"
+                    :description "Quarterly report for review"
+                    :mime-type "application/pdf"
+                    :priority 4.5
+                    :audience [:user])
+```
+
 Tools can also return specific error objects:
 
 ```clojure
 (core/tool-error "Something went wrong")
 ```
+
+### Structured Tool Output
+
+When a tool declares an `:output-schema`, MCP 2025-06-18 lets the handler
+return both displayable content and a structured payload. Use
+`core/tool-result` for that:
+
+```clojure
+(def weather-tool
+  (server/tool
+    "get_current_weather"
+    "Reports current weather based on the location"
+    location-schema
+    (fn [exchange {:keys [location]}]
+      (let [result {:location location
+                    :temperature 18
+                    :condition "sunny"}]
+        (core/tool-result
+          ;; Displayable content the user/LLM sees
+          (format "Weather at %s: %s, %d°C"
+                  location (:condition result) (:temperature result))
+          ;; Structured payload conforming to :output-schema
+          result
+          ;; Optional :_meta on the result envelope
+          :_meta {"com.example/source" "weather.com"})))
+    :output-schema (server/obj-schema
+                     "Weather observation"
+                     {:location (server/str-schema "Location" nil)
+                      :temperature (server/num-schema "Temperature in °C" -100 100 nil nil nil)
+                      :condition (server/str-schema "Condition" nil)}
+                     ["location" "temperature" "condition"])))
+```
+
+Plain (non-structured) handlers can return the same content shapes shown
+above; you only need `core/tool-result` when you also want to send
+`:structuredContent` or attach `:_meta` to the result envelope.
 
 ## Prompts
 
@@ -371,13 +446,29 @@ Prompts work similarly to tools - they can be added or removed from sessions wit
 (server/remove-prompt session "code_review")
 ```
 
+`server/prompt` accepts the following optional keyword arguments
+(MCP 2025-06-18):
+
+- `:title` — human-readable display name; clients SHOULD prefer it over `name`.
+- `:_meta` — map of arbitrary metadata to attach to the prompt. Keys under
+  `:_meta` are preserved verbatim on the wire.
+
+```clojure
+(server/prompt "code_review" "Request Code Review"
+               {:code "Code to review"}
+               {}
+               code-review
+               :title "Code Review"
+               :_meta {"com.example/category" "engineering"})
+```
+
 ### Prompt Return Values
 
 Prompt handlers return a description and one or more messages:
 
 ```clojure
 ;; Full response object
-(core/prompt-resp "Our special review prompt" 
+(core/prompt-resp "Our special review prompt"
                   [(core/message nil (core/text-content "Here's the prompt"))])
 
 ;; Simplified forms (all equivalent)
@@ -387,6 +478,10 @@ Prompt handlers return a description and one or more messages:
 (core/prompt-resp "Our special review prompt" ["Here's the prompt"])
 ;; these all produce same thing
 
+;; Attach :_meta to the prompt result envelope (MCP 2025-06-18)
+(core/prompt-resp "Our special review prompt"
+                  "Here's the prompt"
+                  :_meta {"com.example/version" "v2"})
 ```
 
 ## Resources
@@ -399,6 +494,43 @@ Resource support is added by setting a resource handler that implements the `Res
 
 Currently, one implementation is provided:
 - [Lookup Map Resources](doc/resource-lookup.md)
+
+### Resource Descriptions
+
+Use `core/resource-desc` to declare a resource entry. MCP 2025-06-18 adds
+two optional fields:
+
+- `:title` — human-readable display name; clients SHOULD prefer it over `name`.
+- `:_meta` — map of arbitrary metadata preserved verbatim on the wire.
+
+```clojure
+(core/resource-desc "file:///report.pdf"
+                    "report"
+                    "Quarterly report"
+                    "application/pdf"
+                    nil
+                    :title "Q4 Report"
+                    :_meta {"com.example/owner" "finance"})
+```
+
+### Resource Read Results
+
+A `resources/read` handler can return a `ResourceResponse` (or a
+collection of them) directly. If you also need to attach `:_meta` to the
+read-result envelope itself (MCP 2025-06-18), wrap the contents with
+`core/resource-read-result`:
+
+```clojure
+(core/resource-read-result
+  (core/resource "Hello" "text/plain" "file:///hello.txt")
+  :_meta {"com.example/cache" "hit"})
+
+;; Or wrap a collection of ResourceResponses
+(core/resource-read-result
+  [(core/resource part-1 "text/plain" uri-1)
+   (core/resource part-2 "text/plain" uri-2)]
+  :_meta {"com.example/source" "db"})
+```
 
 ## Resource Templates
 
@@ -419,6 +551,23 @@ Resource templates define URI patterns for dynamically resolved resources. They 
 The annotations vector allows attaching metadata to the template:
 - `:audience` — who the resource is intended for (`:user`, `:assistant`, or both)
 - `:priority` — numeric priority hint for ordering (higher = more important)
+
+`server/add-resource-template` also accepts the following optional keyword
+arguments (MCP 2025-06-18):
+
+- `:title` — human-readable display name; clients SHOULD prefer it over `name`.
+- `:_meta` — map of arbitrary metadata preserved verbatim on the wire.
+
+```clojure
+(server/add-resource-template session
+                              "file:///{temp}.txt"
+                              "general_file"
+                              "General file template"
+                              "text/plain"
+                              nil
+                              :title "General File"
+                              :_meta {"com.example/category" "filesystem"})
+```
 
 ## Completions
 
@@ -441,6 +590,68 @@ You can also set a general completion handler for unmatched requests:
   (fn [exchange ref-type ref-name name value] 
     (core/completion-resp ["completion 1" "completion 2"])))
 ```
+
+### Completion Context
+
+MCP 2025-06-18 lets clients send already-resolved arguments along with a
+completion request, so the server can produce context-aware suggestions.
+Use `core/completion-context` from inside a completion handler to read it:
+
+```clojure
+(defn city-completion [exchange name value]
+  (let [{:keys [arguments]} (core/completion-context exchange)
+        country (get arguments :country)]
+    (core/completion-resp (cities-in country value))))
+```
+
+The handler arity is unchanged — context is exposed through the
+`exchange` (via request metadata) so existing handlers keep working
+without modification. `completion-context` returns `nil` when the client
+did not include a context.
+
+## Titles and Metadata
+
+MCP 2025-06-18 introduces two cross-cutting fields that appear on tools,
+prompts, resources, resource templates, and a few result envelopes:
+
+- `:title` — human-readable display name. Clients SHOULD prefer it over the
+  programmatic `name` when rendering UI. The programmatic `name` remains
+  the identifier servers use for dispatch.
+- `:_meta` — map of arbitrary metadata. Use it to attach
+  application-specific information (categories, cost tiers, source,
+  cache hints, etc.) without colliding with reserved spec fields.
+
+### Where you can attach them
+
+| Spec item / envelope             | Helper                              | `:title` | `:_meta` |
+| -------------------------------- | ----------------------------------- | -------- | -------- |
+| Tool definition                  | `server/tool`                       | yes      | yes      |
+| Prompt definition                | `server/prompt`                     | yes      | yes      |
+| Resource description             | `core/resource-desc`                | yes      | yes      |
+| Resource template                | `server/add-resource-template`      | yes      | yes      |
+| Resource link content            | `core/resource-link`                | yes      | n/a      |
+| Tool result envelope             | `core/tool-result`                  | n/a      | yes      |
+| Prompt result envelope           | `core/prompt-resp`                  | n/a      | yes      |
+| Resource read result envelope    | `core/resource-read-result`         | n/a      | yes      |
+
+### Verbatim wire encoding for `:_meta`
+
+Most spec keys go through a kebab→camelCase rewrite when written to the
+wire (e.g. `:exclusive-minimum` becomes `:exclusiveMinimum`). The
+contents of `:_meta` are deliberately **not** rewritten — the
+serializer copies them through untouched. This lets you put reverse-DNS
+identifiers, snake_case keys, or any other custom-formatted keys into
+`:_meta` and have them appear exactly as written:
+
+```clojure
+{:_meta {"com.example/cost-tier" "premium"
+         "com.example/cache_hint" "skip"
+         :keep-as-is "verbatim"}}
+```
+
+The same rule applies on the way in: `core/request-_meta` (see
+[Request Metadata](#request-metadata)) returns the inbound `:_meta` map
+verbatim.
 
 ## Client Communication
 
@@ -543,6 +754,63 @@ Request text generation from the client:
         (.thenApply (fn [sampling-result]
                       (println "Generation complete:" (:content sampling-result)))))
 ```
+
+### Elicitation
+
+Elicitation lets a server ask the user (via the client) for structured
+input mid-flight. Unlike sampling, the client doesn't generate the
+response with an LLM — it presents the request to the user and returns
+their answer. The schema is constrained: a flat object schema with
+primitive properties.
+
+```clojure
+;; Returns CompletableFuture, or nil if client doesn't support elicitation
+(some-> (core/elicitation
+          exchange
+          "Please confirm before deleting these files:"
+          (server/obj-schema
+            "Confirmation"
+            {:confirm  (server/bool-schema "Confirm deletion")
+             :reason   (server/str-schema "Optional comment" nil)}
+            ["confirm"]))
+        (.thenApply (fn [{:keys [action content]}]
+                      ;; action is one of "accept", "decline", "cancel"
+                      ;; content is the user's response (a map) when action = "accept"
+                      (case action
+                        "accept"  (do-the-deletion content)
+                        "decline" (log-decline content)
+                        "cancel"  (log-cancel)))))
+
+;; With progress callback
+(some-> (core/elicitation exchange message json-schema
+                          (fn [progress]
+                            (println "Elicitation progress:" (:message progress))))
+        (.thenApply ...))
+```
+
+The result envelope contains `:action` (one of `"accept"`, `"decline"`,
+`"cancel"`) and, when accepted, `:content` carrying the user's response
+matching the requested schema.
+
+### Request Metadata
+
+Every MCP request can carry a top-level `:_meta` map (MCP 2025-06-18).
+Handlers can read it with `core/request-_meta`:
+
+```clojure
+(defn my-tool [exchange args]
+  (let [meta (core/request-_meta exchange)
+        trace-id (get meta "com.example/trace-id")]
+    (when trace-id
+      (log/info "Tool called with trace" trace-id))
+    ...))
+```
+
+The map is exposed verbatim — keys are not transformed. Use it to read
+correlation IDs, feature flags, or any other request-scoped metadata the
+client decides to attach.
+
+`request-_meta` returns `nil` when the client did not include `:_meta`.
 
 ### Cancelling Server Requests to Client
 
