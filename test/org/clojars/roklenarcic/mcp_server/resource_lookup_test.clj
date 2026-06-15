@@ -96,7 +96,7 @@
           exchange (server/exchange (atom {}))
           result (res/list-resources lookup-impl exchange nil)]
       (is (match? {:resources []
-                   :next-cursor nil}
+                   :nextCursor nil}
                   result))))
 
   (testing "List resources with some resources"
@@ -115,7 +115,7 @@
                                 :name "Test File 2"
                                 :description "Second"
                                 :mimeType "text/plain"}]
-                   :next-cursor nil}
+                   :nextCursor nil}
                   result))))
 
   (testing "Get existing resource"

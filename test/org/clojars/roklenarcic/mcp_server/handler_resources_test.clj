@@ -21,20 +21,20 @@
   (testing "List resources with some resources"
     (let [resource-map (lookup/lookup-map false)
           session (atom {::mcp/handlers {:resources resource-map}})]
-      (is (= {:next-cursor nil
+      (is (= {:nextCursor nil
               :resources []}
              (resources/resources-list session {} {})))
       (lookup/add-resource session
                            (c/resource-desc "file:///test.txt" "Test File" "A test" "text/plain" nil)
                            (fn [exchange uri] "file content"))
-      (is (= {:next-cursor nil
+      (is (= {:nextCursor nil
               :resources [{:annotations nil
                            :description "A test"
                            :mimeType "text/plain"
                            :name "Test File"
                            :uri "file:///test.txt"}]}
              (resources/resources-list session {} {})))
-      (is (= {:next-cursor nil
+      (is (= {:nextCursor nil
               :resources [{:annotations nil
                            :description "A test"
                            :mimeType "text/plain"
@@ -74,9 +74,9 @@
     (let [session (atom {::mcp/handlers {:resources (lookup/lookup-map true)}})
           exchange (server/exchange session)
           resource-obj {:uri "file:///test.txt"}]
-      (is (= "file:///test.txt" (resources/subscribe exchange resource-obj)))
+      (is (= {} (resources/subscribe exchange resource-obj)))
       (is (= #{"file:///test.txt"} (::mcp/resource-subscriptions @session)))
-      (is (= "file:///test.txt" (resources/unsubscribe exchange resource-obj)))
+      (is (= {} (resources/unsubscribe exchange resource-obj)))
       (is (= #{} (::mcp/resource-subscriptions @session))))))
 
 (deftest resources-templates-list-test

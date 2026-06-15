@@ -19,7 +19,7 @@
   (supports-subscriptions? [this] support-subscriptions?)
   (list-resources [this exchange cursor]
     (let [resources (::mcp/resource-list @(c/get-session exchange))]
-      {:next-cursor nil :resources (mapv #(util/camelcase-keys (dissoc % :handler)) (vals resources))}))
+      {:nextCursor nil :resources (mapv #(util/camelcase-keys (dissoc % :handler)) (vals resources))}))
   (get-resource [this exchange uri]
     (get-in @(c/get-session exchange) [::mcp/resource-list uri]))
   (subscribe [this exchange uri]

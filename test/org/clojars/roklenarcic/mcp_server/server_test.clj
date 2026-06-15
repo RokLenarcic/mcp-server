@@ -139,7 +139,7 @@
                   (json/read-json (first (line-seq stdout)))))))
   (testing "List resources when some are available"
     (is (match? {"jsonrpc" "2.0"
-                 "result" {"next-cursor" nil,
+                 "result" {"nextCursor" nil,
                            "resources"
                            [{"uri" "http://resource.txt",
                              "mimeType" "text/plain",
@@ -895,7 +895,7 @@
       (test-in/print-req stdin "resources/subscribe" {:uri "http://resource.txt"})
       (is (match? {"id" int?
                    "jsonrpc" "2.0"
-                   "result" "http://resource.txt"}
+                   "result" {}}
                   (json/read-json (.readLine stdout))))
       (server/notify-resource-changed server "http://resource.txt")
       (is (= {"jsonrpc" "2.0"
@@ -905,7 +905,7 @@
       (test-in/print-req stdin "resources/unsubscribe" {:uri "http://resource.txt"})
       (is (match? {"id" int?
                    "jsonrpc" "2.0"
-                   "result" "http://resource.txt"}
+                   "result" {}}
                   (json/read-json (.readLine stdout))))
       (is (= #{} (::mcp/resource-subscriptions @server)))
       (server/notify-resource-changed server "http://resource.txt")

@@ -112,13 +112,13 @@
    - exchange: request exchange object
    - res: resolved resource object containing :uri
 
-   Returns the subscribed URI."
+   Returns an empty result map per the MCP spec."
   [exchange res]
   (log/debug "Subscribing to resource:" (:uri res))
 
   (let [resources (resources' (c/get-session exchange))]
     (res/subscribe resources exchange (:uri res))
-    (:uri res)))
+    {}))
 
 (defn unsubscribe
   "Handles resources/unsubscribe requests from the client.
@@ -127,12 +127,12 @@
    - exchange: request exchange object
    - res: resolved resource object containing :uri
 
-   Returns the unsubscribed URI."
+   Returns an empty result map per the MCP spec."
   [exchange res]
   (log/debug "Unsubscribing from resource:" (:uri res))
   (let [resources (resources' (c/get-session exchange))]
     (res/unsubscribe resources exchange (:uri res))
-    (:uri res)))
+    {}))
 
 (defn notify-changed
   "Notifies the client that a resource has changed, if subscriptions are enabled

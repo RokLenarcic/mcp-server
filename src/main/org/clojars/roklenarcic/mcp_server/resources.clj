@@ -41,7 +41,7 @@
      - cursor: optional pagination cursor (string or nil)
      
      Returns a map containing:
-     - :next-cursor: string cursor for next page, or nil if no more pages
+     - :nextCursor: string cursor for next page, or nil if no more pages
      - :resources: vector of resource description maps
      
      Each resource description should be created using core/resource-desc
