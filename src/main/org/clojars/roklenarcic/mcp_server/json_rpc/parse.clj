@@ -141,19 +141,24 @@
     (if id (->request method params id) (->notification method params))))
 
 (defn object->requests
-  "Creates Parsed JSON-RPC message(s) from a parsed JSON payload.
+  "Creates a Parsed JSON-RPC message from a parsed JSON payload.
 
-   Handles both single messages and batches of messages.
+   The MCP 2025-06-18 protocol no longer supports JSON-RPC batches, so any
+   array payload is rejected with an Invalid Request error.
 
    Parameters:
-   - parsed-json: either a parsed JSON object/array or an Exception from parsing
+   - parsed-json: either a parsed JSON object or an Exception from parsing
 
-   Returns a Parsed record, vector of Parsed records, or an error."
+   Returns a Parsed record."
   [parsed-json]
-  (if (sequential? parsed-json)
-    (if (empty? parsed-json)
-      (invalid-request nil)
-      (vec (keep parse-request parsed-json)))
-    (if (instance? Exception parsed-json)
-      (parse-error parsed-json)
-      (parse-request parsed-json))))
+  (cond
+    (sequential? parsed-json)
+    (do
+      (log/debug "Rejecting JSON-RPC batch payload (not supported by MCP 2025-06-18)")
+      (invalid-request "Batch requests are not supported" nil))
+
+    (instance? Exception parsed-json)
+    (parse-error parsed-json)
+
+    :else
+    (parse-request parsed-json)))

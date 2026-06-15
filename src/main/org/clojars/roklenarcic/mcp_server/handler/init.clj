@@ -4,9 +4,9 @@
             [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]]
             [org.clojars.roklenarcic.mcp-server.resources :as resources]))
 
-(def server-protocol-version "2025-03-26")
+(def server-protocol-version "2025-06-18")
 
-(def allowed-protocol-versions #{"2025-03-26" "2024-11-05" "2025-06-18"})
+(def allowed-protocol-versions #{"2025-06-18"})
 
 (defn ->capabilities [server-info handlers]
   (cond-> {}

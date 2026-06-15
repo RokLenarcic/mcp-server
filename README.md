@@ -6,6 +6,36 @@ The library is currently in alpha stage with features being added incrementally.
 
 [![Clojars Project](https://img.shields.io/clojars/v/org.clojars.roklenarcic/mcp-server.svg)](https://clojars.org/org.clojars.roklenarcic/mcp-server)
 
+```clojure
+;; deps.edn
+org.clojars.roklenarcic/mcp-server {:mvn/version "0.2.14"}
+```
+
+## Table of Contents
+
+- [Why Use This Library?](#why-use-this-library)
+- [Current Alpha Limitations](#current-alpha-limitations)
+- [Quick Start](#quick-start)
+- [Alternative: Manual Configuration](#alternative-manual-configuration)
+- [HTTP/SSE Transport](#httpsse-transport)
+- [JSON Serializers](#json-serializers)
+- [Key Namespaces](#key-namespaces)
+- [Session Management](#session-management)
+- [Execution Models](#execution-models)
+- [Handler Functions](#handler-functions)
+- [Error Handling](#error-handling)
+- [Tools](#tools)
+- [Prompts](#prompts)
+- [Resources](#resources)
+- [Resource Templates](#resource-templates)
+- [Completions](#completions)
+- [Client Communication](#client-communication)
+- [Logging](#logging)
+- [Middleware](#middleware)
+- [Errors](#errors)
+- [Authentication](#authentication)
+- [License](#license)
+
 ## Why Use This Library?
 
 Existing MCP server implementations often force specific technology choices on you - they bundle JSON parsers, web servers, loggers, and synchronous/asynchronous patterns. This library takes a different approach by letting you choose your own components.
@@ -33,7 +63,6 @@ These features are not yet implemented:
 
 - Pagination support
 - Tool parameter schema validation
-- Protocol version 2025-06-18 support
 
 The API may change before the stable release.
 
@@ -130,6 +159,38 @@ Since sessions are just maps, you can build them manually instead of using the h
 
 The dispatch table is a lookup map that routes JSON-RPC calls to their handlers.
 
+## HTTP/SSE Transport
+
+For HTTP-based communication with SSE streaming, use `ring-handler` from the HTTP transport namespace. This creates a standard Ring handler that you can mount in any Ring-compatible HTTP server:
+
+```clojure
+(ns example.http-server
+  (:require [org.clojars.roklenarcic.mcp-server.json.charred :as json]
+            [org.clojars.roklenarcic.mcp-server.server :as server]
+            [org.clojars.roklenarcic.mcp-server.server.http :as http]))
+
+(defn start []
+  (let [session (-> (server/make-session
+                      (server/server-info "My Service" "1.0.0" "Description")
+                      (json/serde {})
+                      {})
+                    (server/add-tool my-tool))
+        sessions (http/memory-sessions-store)
+        handler (http/ring-handler session sessions
+                                   {:allowed-origins ["https://example.com"]
+                                    :client-req-timeout-ms 120000})]
+    ;; Mount `handler` in your preferred Ring-compatible HTTP server
+    ;; (ring-jetty, http-kit, etc.)
+    handler))
+```
+
+The `ring-handler` supports both synchronous and asynchronous Ring operation. The `memory-sessions-store` provides an in-memory session store backed by `ConcurrentHashMap`. You can implement the `Sessions` protocol for custom session storage (e.g., Redis-backed).
+
+Options:
+- `:allowed-origins` — collection of allowed Origin headers (`nil` permits all origins)
+- `:client-req-timeout-ms` — timeout for client requests in milliseconds (default: 120000)
+- `:endpoint` — optional endpoint information for SSE connections
+
 ## JSON Serializers
 
 You can write your own integration, by extending the `org.clojars.roklenarcic.mcp-server.json-rpc/JSONSerialization` protocol, but there are many available already:
@@ -140,7 +201,13 @@ You can write your own integration, by extending the `org.clojars.roklenarcic.mc
 - org.clojars.roklenarcic.mcp-server.json.clj-data/serde
 - org.clojars.roklenarcic.mcp-server.json.jsonista/serde
 
-You need to add your own dependency for selected JSON serialization. 
+Each requires its own dependency on the classpath. Some guidance on choosing:
+
+- **Charred** — fastest option, good default for JVM Clojure
+- **Cheshire** — most widely used in the Clojure ecosystem
+- **Jsonista** — fast, Metosin ecosystem
+- **Babashka JSON** — compatible with Babashka
+- **clj-data** (`clojure.data.json`) — no extra dependencies beyond Clojure contrib
 
 ## Key Namespaces
 
@@ -315,7 +382,7 @@ Prompt handlers return a description and one or more messages:
 
 ;; Simplified forms (all equivalent)
 (core/prompt-resp "Our special review prompt" [(core/text-content "Here's the prompt")])
-;; for things like text you can skip wrapping in into context, and you can also skip vector if you have only 1 message
+;; For simple text content you can skip wrapping in content objects, and you can skip the vector for a single message
 (core/prompt-resp "Our special review prompt" "Here's the prompt")
 (core/prompt-resp "Our special review prompt" ["Here's the prompt"])
 ;; these all produce same thing
@@ -335,7 +402,7 @@ Currently, one implementation is provided:
 
 ## Resource Templates
 
-Resource templates can be added or removed from sessions:
+Resource templates define URI patterns for dynamically resolved resources. They can be added or removed from sessions:
 
 ```clojure
 (server/add-resource-template session 
@@ -349,6 +416,10 @@ Resource templates can be added or removed from sessions:
 (server/remove-resource-template session "general_file")
 ```
 
+The annotations vector allows attaching metadata to the template:
+- `:audience` — who the resource is intended for (`:user`, `:assistant`, or both)
+- `:priority` — numeric priority hint for ordering (higher = more important)
+
 ## Completions
 
 Completions provide autocomplete functionality:
@@ -358,8 +429,8 @@ Completions provide autocomplete functionality:
   (core/completion-resp ["completion 1" "completion 2"]))
 
 ;; Add completion for specific prompts or resources
-(server/add-completion server "ref/prompt" "test-prompt" completion)
-(server/remove-completion server "ref/prompt" "test-prompt")
+(server/add-completion session "ref/prompt" "test-prompt" completion)
+(server/remove-completion session "ref/prompt" "test-prompt")
 ```
 
 You can also set a general completion handler for unmatched requests:
@@ -573,5 +644,9 @@ This library provides a Ring handler. You can wrap handler with middleware to bl
 
 Within your handlers the request meta that `RequestExchange` object provides is the request map itself, and 
 you can add your own Authentication logic to your handlers. 
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
 
 Copyright (c) 2025 Rok Lenarčič

@@ -6,7 +6,6 @@
             [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]])
   (:import (clojure.lang IAtom)
            (java.util.concurrent CancellationException CompletableFuture ConcurrentHashMap ConcurrentLinkedQueue TimeoutException)
-           (java.util.function BiFunction Function)
            (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (def ^ConcurrentLinkedQueue client-req-queue
@@ -159,22 +158,6 @@
                         (if (instance? CompletableFuture ret) 
                           ret 
                           (CompletableFuture/completedFuture ret)))))))
-
-(defn combine-futures
-  "Combines multiple responses, some of which may be CompletableFutures.
-   
-   Parameters:
-   - responses: vector of responses (mix of regular values and CompletableFutures)
-   
-   Returns either a vector of resolved values or a CompletableFuture that resolves
-   to a vector when all futures complete."
-  [responses]
-  (let [{normal false futs true} (group-by #(instance? CompletableFuture %) responses)]
-    (if (seq futs)
-      (-> #(.thenCombine ^CompletableFuture %1 ^CompletableFuture %2 ^BiFunction conj)
-          ^CompletableFuture (reduce (CompletableFuture/completedFuture normal) futs)
-          (.thenApply ^Function not-empty))
-      (not-empty normal))))
 
 (defn method-not-found-handler
   "Creates a handler that always reports that a method hasn't been found.

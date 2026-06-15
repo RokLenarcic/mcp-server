@@ -21,15 +21,9 @@
    Returns a JSON-RPC response object or CompletableFuture, or nil for notifications."
   [session str-msg]
   (try
-    (let [{::mcp/keys [dispatch-table serde]} @session
-          _ (log/trace "Processing message of length:" (count str-msg))
-          parsed (rpc/parse-string str-msg serde)
-          _ (log/trace "Parsed message type:" (if (sequential? parsed) "batch" "single"))
-          handle #(rpc/handle-parsed % dispatch-table session nil)]
-      (pcatch (if (sequential? parsed)
-                (->> (keep handle parsed)
-                     rpc/combine-futures)
-                (handle parsed))
+    (let [{::mcp/keys [dispatch-table serde]} @session]
+      (log/trace "Processing message of length:" (count str-msg))
+      (pcatch (rpc/handle-parsed (rpc/parse-string str-msg serde) dispatch-table session nil)
               (fn [e]
                 (log/error e "Error during message processing")
                 (rpc/make-response (c/internal-error nil (ex-message e)) nil))))

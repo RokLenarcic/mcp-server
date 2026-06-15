@@ -2,3 +2,5 @@ target/
 *.asc
 .nrepl-port
 .claude/
+.lsp/
+.clj-kondo/

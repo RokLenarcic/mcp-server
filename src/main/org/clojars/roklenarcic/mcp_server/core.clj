@@ -37,8 +37,10 @@
      If progress-callback is supplied, it will be called when client reports progress.
      
      sampling-request should be created with the sampling-request function.")
+  (^CompletableFuture elicitation [this message json-schema] [this message json-schema progress-callback]
+    "Requests elicitation, ")
   (report-progress [this msg]
-    "Reports progress to client, msg is a map with :progress :total :message keys")
+    "Reports progress to the client, msg is a map with :progress :total :message keys")
   (^CompletableFuture req-cancelled-future [this] "Returns CompletableFuture that is completed with cancellation message if the request is cancelled"))
 
 (extend-protocol p/ResourceResponse

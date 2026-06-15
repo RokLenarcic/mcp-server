@@ -100,7 +100,7 @@
                         :clientInfo {:name "Test Client" :version "1.0.0"}})
     ;; Read initialize response
     (is (match? {"error" {"code" -32600
-                          "data" "Invalid protocol version 2024-11-06, supported version #{\"2025-03-26\" \"2025-06-18\" \"2024-11-05\"}"
+                          "data" #"Invalid protocol version 2024-11-06, supported version #\{\"2025-06-18\"\}"
                           "message" "Invalid Request"}
                  "id" int?
                  "jsonrpc" "2.0"}
@@ -660,18 +660,21 @@
                    "id" nil}
                   (json/read-json (first (line-seq stdout))))))))
 
-;; Batch request test
+;; Batch request rejection test
 (deftest batch-request-test
-  (let [{:keys [stdin stdout]} (test-in/create-server)]
-    (write-batch stdin
-                 [{:jsonrpc "2.0" :method "ping" :params {} :id 1}
-                  {:jsonrpc "2.0" :method "tools/list" :params {} :id 2}
-                  {:jsonrpc "2.0" :method "prompts/list" :params {} :id 3}])
-    (.close stdin)
-    (let [responses (first (read-responses stdout))]
-      (is (= 3 (count responses)))
-      (is (every? #(= "2.0" (get % "jsonrpc")) responses))
-      (is (= #{1 2 3} (set (map #(get % "id") responses)))))))
+  (testing "Batch requests are rejected with a single Invalid Request error"
+    (let [{:keys [stdin stdout]} (test-in/create-server)]
+      (write-batch stdin
+                   [{:jsonrpc "2.0" :method "ping" :params {} :id 1}
+                    {:jsonrpc "2.0" :method "tools/list" :params {} :id 2}
+                    {:jsonrpc "2.0" :method "prompts/list" :params {} :id 3}])
+      (.close stdin)
+      (is (match? {"jsonrpc" "2.0"
+                   "error" {"code" -32600
+                            "message" "Invalid Request"
+                            "data" "Batch requests are not supported"}
+                   "id" nil}
+                  (json/read-json (first (line-seq stdout))))))))
 
 ;; Protocol flow test
 (deftest protocol-flow-test
@@ -899,7 +902,8 @@
         (.close))
       (is (match? {"jsonrpc" "2.0"
                    "error" {"code" -32600 ; Invalid Request
-                            "message" string?}
+                            "message" "Invalid Request"
+                            "data" "Batch requests are not supported"}
                    "id" nil}
                   (json/read-json (first (line-seq stdout)))))))
 

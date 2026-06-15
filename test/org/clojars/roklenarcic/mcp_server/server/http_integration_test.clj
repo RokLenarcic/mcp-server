@@ -291,13 +291,13 @@
           (stop-test-server server-info))))))
 
 (deftest http-batch-requests-test
-  (testing "Batch requests over HTTP"
+  (testing "Batch requests over HTTP are rejected with a single Invalid Request error"
     (let [session-template (create-test-session)
           server-info (start-test-server session-template)
           session-id (initialize-session)]
-      
+
       (try
-        ;; Send batch request
+        ;; Send a batch (JSON array) — must be rejected as a single error
         (let [batch-request [{:jsonrpc "2.0" :method "ping" :params {} :id 1}
                              {:jsonrpc "2.0" :method "tools/list" :params {} :id 2}
                              {:jsonrpc "2.0" :method "prompts/list" :params {} :id 3}]
@@ -305,12 +305,16 @@
                                            batch-request
                                            {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status batch-response)))
+          (is (= "text/event-stream" (get-in batch-response [:headers "content-type"])))
+          ;; SSE body framing is "data: <json>\n\n" — strip the 5-char "data:" prefix
           (let [response-body (json/read-json (subs (:body batch-response) 5))]
-            (is (vector? response-body))
-            (is (= 3 (count response-body)))
-            (is (every? #(= "2.0" (get % "jsonrpc")) response-body))
-            (is (= #{1 2 3} (set (map #(get % "id") response-body))))))
-        
+            (is (match? {"jsonrpc" "2.0"
+                         "error" {"code" -32600
+                                  "message" "Invalid Request"
+                                  "data" "Batch requests are not supported"}
+                         "id" nil}
+                        response-body))))
+
         (finally
           (stop-test-server server-info))))))
 
@@ -424,8 +428,9 @@
                                       :id 2})]
           (is (= 200 (:status response)))
           (is (match? {"jsonrpc" "2.0"
-                       "error" {"code" int?
-                                "message" string?}
+                       "error" {"code" -32600
+                                "message" "Invalid Request"
+                                "data" #"Invalid protocol version 1999-01-01, supported version #\{\"2025-06-18\"\}"}
                        "id" 2}
                       (json/read-json (:body response)))))
         

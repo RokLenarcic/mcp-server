@@ -63,7 +63,7 @@
    :headers {"Content-Type" "application/json"}})
 
 (defn process
-  "Processes an HTTP request containing MCP JSON-RPC messages.
+  "Processes an HTTP request containing an MCP JSON-RPC message.
    
    Parameters:
    - req: Ring request map
@@ -73,13 +73,9 @@
   [req session]
   (try
     (let [{::mcp/keys [dispatch-table serde]} @session
-          msg (slurp (:body req))
-          _ (log/debug "Processing request" msg)
-          parsed (rpc/parse-string msg serde)
-          handle #(rpc/handle-parsed % dispatch-table session req)]
-      (if (vector? parsed)
-        (->> (keep handle parsed) rpc/combine-futures)
-        (handle parsed)))
+          msg (slurp (:body req))]
+      (log/debug "Processing request" msg)
+      (rpc/handle-parsed (rpc/parse-string msg serde) dispatch-table session req))
     (catch Exception e
       (log/error e)
       (c/internal-error nil (ex-message e)))))

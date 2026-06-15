@@ -36,12 +36,12 @@
       (is (= {:success true} (get-in parsed [:params :result])))
       (is (= 123 (get-in parsed [:params :id])))))
 
-  (testing "Batch request"
+  (testing "Batch requests are rejected"
     (let [json "[{\"jsonrpc\":\"2.0\",\"method\":\"test1\",\"id\":1},{\"jsonrpc\":\"2.0\",\"method\":\"test2\",\"id\":2}]"
           parsed (rpc/parse-string json test-serde)]
-      (is (vector? parsed))
-      (is (= 2 (count parsed)))
-      (is (every? #(= :request (:item-type %)) parsed))))
+      (is (= :error (:item-type parsed)))
+      (is (= parse/INVALID_REQUEST (:code (:error parsed))))
+      (is (nil? (:id parsed)))))
 
   (testing "Invalid JSON"
     (let [parsed (rpc/parse-string "invalid json{" test-serde)]
@@ -55,7 +55,7 @@
       (is (= :error (:item-type parsed)))
       (is (= 123 (:id parsed)))))
 
-  (testing "Empty batch"
+  (testing "Empty batch is rejected"
     (let [parsed (rpc/parse-string "[]" test-serde)]
       (is (= parse/INVALID_REQUEST (:code (:error parsed))))
       (is (= :error (:item-type parsed)))
@@ -242,36 +242,6 @@
       (is (= "2.0" (:jsonrpc response)))
       (is (= -32600 (get-in response [:error :code])))
       (is (= 123 (:id response))))))
-
-(deftest combine-futures-test
-  (testing "Combining multiple futures"
-    (let [future1 (CompletableFuture/completedFuture {:result1 true})
-          future2 (CompletableFuture/completedFuture {:result2 true})
-          combined (rpc/combine-futures [future1 future2])]
-      (is (instance? CompletableFuture combined))
-      (let [result @combined]
-        (is (= 2 (count result)))
-        (is (every? map? result)))))
-
-  (testing "Combining single future"
-    (let [future1 (CompletableFuture/completedFuture {:single true})
-          combined (rpc/combine-futures [future1])]
-      (is (instance? CompletableFuture combined))
-      (is (= [{:single true}] @combined))))
-
-  (testing "Empty futures list"
-    (let [combined (rpc/combine-futures [])]
-      (is (nil? combined))))
-
-  (testing "Mixed futures and regular values"
-    (let [future1 (CompletableFuture/completedFuture {:future true})
-          regular {:regular true}
-          combined (rpc/combine-futures [regular future1])]
-      (is (instance? CompletableFuture combined))
-      (let [result @combined]
-        (is (= 2 (count result)))
-        (is (some #(= {:regular true} %) result))
-        (is (some #(= {:future true} %) result))))))
 
 (deftest client-request-management-test
   (testing "Client request cleanup"
