@@ -132,6 +132,14 @@
                                            :annotations annotations
                                            :text (p/-con-text o))
 
+      (satisfies? p/ResourceLinkContent o) (?assoc {:type "resource_link"
+                                                    :uri (p/-link-uri o)
+                                                    :name (p/-link-name o)}
+                                                   :annotations annotations
+                                                   :title (p/-link-title o)
+                                                   :description (p/-link-description o)
+                                                   :mimeType (p/-link-mime-type o))
+
       (satisfies? p/ResourceResponse o) (?assoc {:type "resource"}
                                                 :annotations annotations
                                                 :resource (proto->resource nil o)))))

@@ -189,6 +189,34 @@
      (-res-mime [this] (p/-res-mime resource))
      (-res-uri [this] (p/-res-uri resource)))))
 
+(defn resource-link
+  "Create a resource link content piece for Tools and Prompts (MCP 2025-06-18).
+
+   A resource link is a lightweight pointer to a resource the client may
+   fetch separately, as opposed to embedded-content which carries the body.
+
+   Parameters:
+   - uri: resource URI (string, required)
+   - name: programmatic name of the resource (string, required)
+
+   Optional keyword arguments:
+   - :title - human-readable title
+   - :description - human-readable description
+   - :mime-type - MIME type of the linked resource
+   - :priority - priority value (double)
+   - :audience - audience keyword or vector of keywords (:user, :assistant)"
+  [uri name & {:keys [title description mime-type priority audience]}]
+  (reify
+    p/Content
+    (-con-priority [this] priority)
+    (-con-audience [this] audience)
+    p/ResourceLinkContent
+    (-link-uri [this] uri)
+    (-link-name [this] name)
+    (-link-title [this] title)
+    (-link-description [this] description)
+    (-link-mime-type [this] mime-type)))
+
 (defn text-content
   "Create text content for Tools and Prompts.
    

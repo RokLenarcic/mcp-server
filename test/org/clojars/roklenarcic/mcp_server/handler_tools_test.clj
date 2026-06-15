@@ -80,4 +80,23 @@
                         {:text "Simple string"
                          :type "text"}]
               :isError false}
-             (tools/tools-call session {} {:name "complex-tool" :arguments {}}))))))
+             (tools/tools-call session {} {:name "complex-tool" :arguments {}})))
+      (server/add-tool session (server/tool "link-tool"
+                                            "Returns a resource_link"
+                                            (server/obj-schema "No params" {} [])
+                                            (fn [exchange _]
+                                              [(c/resource-link "file:///tmp/notes.md" "notes"
+                                                                :title "Project Notes"
+                                                                :description "Top-level notes"
+                                                                :mime-type "text/markdown"
+                                                                :priority 0.7
+                                                                :audience :user)])))
+      (is (= {:content [{:type "resource_link"
+                         :uri "file:///tmp/notes.md"
+                         :name "notes"
+                         :annotations {:priority 0.7 :audience ["user"]}
+                         :title "Project Notes"
+                         :description "Top-level notes"
+                         :mimeType "text/markdown"}]
+              :isError false}
+             (tools/tools-call session {} {:name "link-tool" :arguments {}}))))))

@@ -29,6 +29,18 @@
   (-aud-mime-type [this] "Returns the MIME type of the audio (e.g., 'audio/wav', 'audio/mp3').")
   (-aud-data [this] "Returns the audio data as byte array or InputStream."))
 
+(defprotocol ResourceLinkContent
+  "Protocol for resource link content in MCP messages.
+
+   Unlike embedded resource content (which carries the body), a resource link
+   is a lightweight pointer to a resource the client may fetch separately.
+   Introduced in MCP protocol 2025-06-18."
+  (-link-uri [this] "Returns the resource URI (string).")
+  (-link-name [this] "Returns the programmatic name of the resource (string).")
+  (-link-title [this] "Returns the optional human-readable title, or nil.")
+  (-link-description [this] "Returns the optional description, or nil.")
+  (-link-mime-type [this] "Returns the optional MIME type, or nil."))
+
 (defprotocol PromptResponse
   "Protocol for responses to prompt requests."
   (-prompt-desc [this] "Returns the description of the prompt response.")

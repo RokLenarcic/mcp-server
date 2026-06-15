@@ -62,7 +62,32 @@
       (is (= "Some text" (p/-res-body content)))
       (is (= "text/plain" (p/-res-mime content)))
       (is (= 1.0 (p/-con-priority content)))
-      (is (= :user (p/-con-audience content))))))
+      (is (= :user (p/-con-audience content)))))
+
+  (testing "Resource link content creation"
+    (let [link (c/resource-link "file:///tmp/foo.txt" "foo")]
+      (is (= "file:///tmp/foo.txt" (p/-link-uri link)))
+      (is (= "foo" (p/-link-name link)))
+      (is (nil? (p/-link-title link)))
+      (is (nil? (p/-link-description link)))
+      (is (nil? (p/-link-mime-type link)))
+      (is (nil? (p/-con-priority link)))
+      (is (nil? (p/-con-audience link)))))
+
+  (testing "Resource link content with all options"
+    (let [link (c/resource-link "file:///tmp/bar.json" "bar"
+                                :title "Bar Config"
+                                :description "Configuration file"
+                                :mime-type "application/json"
+                                :priority 0.5
+                                :audience [:user])]
+      (is (= "file:///tmp/bar.json" (p/-link-uri link)))
+      (is (= "bar" (p/-link-name link)))
+      (is (= "Bar Config" (p/-link-title link)))
+      (is (= "Configuration file" (p/-link-description link)))
+      (is (= "application/json" (p/-link-mime-type link)))
+      (is (= 0.5 (p/-con-priority link)))
+      (is (= [:user] (p/-con-audience link))))))
 
 (deftest resource-test
   (testing "Resource with string content"
