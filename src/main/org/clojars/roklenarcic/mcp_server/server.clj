@@ -99,27 +99,29 @@
 
 (defn add-resource-template
   "Add a resource template to a session.
-   
+
    Parameters:
    - session: the session atom
    - uri-template: URI template string with placeholders
-   - name: human-readable name for the template
+   - name: programmatic name for the template
    - description: description of what the template provides
    - mime-type: MIME type of resources created from this template
    - annotations: (optional) additional metadata annotations
-   
+
+   Optional keyword arguments (MCP 2025-06-18):
+   - :title - human-readable display name; clients SHOULD prefer it over name
+     when present
+
    Returns the session atom."
   ([session uri-template name description mime-type]
+   (add-resource-template session uri-template name description mime-type nil))
+  ([session uri-template name description mime-type annotations & {:keys [title]}]
    (log/info "Adding resource template:" name "for URI template:" uri-template)
-   (swap! session update-in
-          [::mcp/handlers :resource-templates]
-          (fn [templates] (conj (or templates []) (h.resources/->resource-template (map-of uri-template name description mime-type)))))
-   session)
-  ([session uri-template name description mime-type annotations]
-   (log/info "Adding resource template with annotations:" name "for URI template:" uri-template)
-   (swap! session update-in
-          [::mcp/handlers :resource-templates]
-          (fn [templates] (conj (or templates []) (h.resources/->resource-template (map-of uri-template name description mime-type annotations)))))
+   (let [spec (-> (map-of uri-template name description mime-type annotations)
+                  (?assoc :title title))]
+     (swap! session update-in
+            [::mcp/handlers :resource-templates]
+            (fn [templates] (conj (or templates []) (h.resources/->resource-template spec)))))
    session))
 
 (defn remove-resource-template
@@ -306,11 +308,16 @@
    (map-of name version logging instructions)))
 
 (defn prompt
-  "Creates a Prompt spec. Required args and optional args are maps of arg_name -> arg_description
+  "Creates a Prompt spec. Required args and optional args are maps of arg_name -> arg_description.
 
-  Handler is (fn [exchange arguments] ... )"
-  [name description required-args optional-args handler]
-  (map-of name description required-args optional-args handler))
+   Handler is (fn [exchange arguments] ... )
+
+   Optional keyword arguments (MCP 2025-06-18):
+   - :title - human-readable display name; clients SHOULD prefer it over name
+     when present"
+  [name description required-args optional-args handler & {:keys [title]}]
+  (-> (map-of name description required-args optional-args handler)
+      (?assoc :title title)))
 
 (defn str-schema
   "Creates a string JSON schema.

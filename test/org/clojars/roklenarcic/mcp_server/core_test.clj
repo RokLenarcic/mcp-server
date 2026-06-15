@@ -25,7 +25,21 @@
             :mime-type "application/json"
             :name "Web Resource"
             :uri "http://example.com"}
-           (c/resource-desc "http://example.com" "Web Resource" nil "application/json" [{:audience [:user :assistant] :priority 1.0}])))))
+           (c/resource-desc "http://example.com" "Web Resource" nil "application/json" [{:audience [:user :assistant] :priority 1.0}]))))
+
+  (testing "Resource description with :title (MCP 2025-06-18)"
+    (is (= {:annotations nil
+            :description "A test file"
+            :mime-type "text/plain"
+            :name "test_file"
+            :title "Friendly Test File"
+            :uri "file:///test.txt"}
+           (c/resource-desc "file:///test.txt" "test_file" "A test file" "text/plain" nil
+                            :title "Friendly Test File"))))
+
+  (testing "Resource description omits :title when not supplied"
+    (is (not (contains? (c/resource-desc "file:///test.txt" "test_file" "A test file" "text/plain" nil)
+                        :title)))))
 
 (deftest content-creation-test
   (testing "Text content creation"

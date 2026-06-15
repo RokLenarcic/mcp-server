@@ -191,6 +191,60 @@
                                                "uriTemplate" "file:///{temp}.txt"}]}}
               (request-and-read "resources/templates/list" {} true))))
 
+;; :title (MCP 2025-06-18) flows through prompts/list, resources/list,
+;; resources/templates/list and is preserved end-to-end on the wire.
+(deftest title-flows-to-wire-test
+  (testing "Prompt :title appears in prompts/list"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (test-in/initialize s)
+      (server/add-prompt server (server/prompt "code_review"
+                                               "Code review prompt"
+                                               {} {}
+                                               (fn [_ _] (c/prompt-resp "ok" "ok"))
+                                               :title "Code Review"))
+      (test-in/print-req stdin "prompts/list" {})
+      (.close stdin)
+      (let [responses (mapv json/read-json (line-seq stdout))]
+        (is (match? (m/embeds [{"result"
+                                {"prompts" [{"name" "code_review"
+                                             "title" "Code Review"
+                                             "description" "Code review prompt"}]}}])
+                    responses)))))
+
+  (testing "Resource :title appears in resources/list"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/set-resources-handler server (lookup/lookup-map true))
+      (lookup/add-resource server
+                           (c/resource-desc "file:///doc.txt" "doc" "Documentation" "text/plain" nil
+                                            :title "Friendly Docs")
+                           (fn [_ _] "hello"))
+      (test-in/initialize s)
+      (test-in/print-req stdin "resources/list" {})
+      (.close stdin)
+      (is (match? {"result"
+                   {"nextCursor" nil
+                    "resources" [{"uri" "file:///doc.txt"
+                                  "name" "doc"
+                                  "title" "Friendly Docs"
+                                  "description" "Documentation"
+                                  "mimeType" "text/plain"}]}}
+                  (json/read-json (first (line-seq stdout)))))))
+
+  (testing "Resource template :title appears in resources/templates/list"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/add-resource-template server "file:///{name}.txt" "general_file" "General file" "text/plain"
+                                    nil :title "General File Template")
+      (test-in/initialize s)
+      (test-in/print-req stdin "resources/templates/list" {})
+      (.close stdin)
+      (is (match? {"result"
+                   {"resourceTemplates" [{"uriTemplate" "file:///{name}.txt"
+                                          "name" "general_file"
+                                          "title" "General File Template"
+                                          "description" "General file"
+                                          "mimeType" "text/plain"}]}}
+                  (json/read-json (first (line-seq stdout))))))))
+
 ;; List prompts test
 (deftest list-prompts-test
   (testing "List prompts when none configured"

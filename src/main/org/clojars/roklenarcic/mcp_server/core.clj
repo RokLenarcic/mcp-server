@@ -5,7 +5,7 @@
   (:require [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.json-rpc.parse :as rpc]
-            [org.clojars.roklenarcic.mcp-server.util :refer [map-of]])
+            [org.clojars.roklenarcic.mcp-server.util :refer [map-of ?assoc]])
   (:import (java.io InputStream)
            (java.util.concurrent CompletableFuture)))
 
@@ -123,15 +123,20 @@
 
 (defn resource-desc
   "Create a resource description for List Resources operation.
-   
+
    Parameters:
    - uri: URI of the resource
-   - name: human-readable name of the resource
+   - name: programmatic name of the resource
    - description: description of the resource
    - mime-type: MIME type of the resource
-   - annotations: optional metadata annotations"
-  [uri name description mime-type annotations]
-  (map-of uri name description mime-type annotations))
+   - annotations: optional metadata annotations
+
+   Optional keyword arguments (MCP 2025-06-18):
+   - :title - human-readable display name; clients SHOULD prefer it over name
+     when present"
+  [uri name description mime-type annotations & {:keys [title]}]
+  (-> (map-of uri name description mime-type annotations)
+      (?assoc :title title)))
 
 (defn audio-content
   "Create audio content for Tools and Prompts.
