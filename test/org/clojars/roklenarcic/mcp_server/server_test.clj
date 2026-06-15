@@ -625,6 +625,76 @@
                    "id" int?}
                   (json/read-json (first (line-seq stdout))))))))
 
+;; Elicitation test
+(deftest elicitation-test
+  (testing "Client supports elicitation: server forwards elicitation/create and returns the user's response"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          schema {:type "object"
+                  :properties {:name {:type "string"
+                                      :description "User's full name"}}
+                  :required ["name"]}
+          tool (server/tool "AskName"
+                            "Ask the user for their name"
+                            (server/obj-schema "D" {} [])
+                            (fn [exchange _]
+                              (-> (c/elicitation exchange "Please provide your name" schema)
+                                  (.thenApply (fn [resp]
+                                                (str "Got " resp))))))]
+      (server/add-tool server tool)
+      (test-in/initialize s)
+      (test-in/print-req stdin "tools/call" {:name "AskName" :arguments {}})
+      (is (match? {"id" int?
+                   "jsonrpc" "2.0"
+                   "method" "elicitation/create"
+                   "params" {"message" "Please provide your name"
+                             "requestedSchema" {"type" "object"
+                                                "properties" {"name" {"type" "string"
+                                                                      "description" "User's full name"}}
+                                                "required" ["name"]}}}
+                  (test-in/get-req-and-resp s {:action "accept"
+                                               :content {:name "Ada Lovelace"}})))
+      (.close stdin)
+      (is (match? {"jsonrpc" "2.0"
+                   "result" {"content"
+                             [{"text" "Got {:action \"accept\", :content {:name \"Ada Lovelace\"}}"
+                               "type" "text"}]
+                             "isError" false}
+                   "id" int?}
+                  (json/read-json (first (line-seq stdout)))))))
+
+  (testing "Client without elicitation capability: handler call returns nil"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          tool-result (atom ::unset)
+          tool (server/tool "AskName"
+                            "Ask the user for their name"
+                            (server/obj-schema "D" {} [])
+                            (fn [exchange _]
+                              (reset! tool-result
+                                      (c/elicitation exchange "Please provide your name" {:type "object"}))
+                              "done"))]
+      (server/add-tool server tool)
+      ;; Initialize with capabilities that omit :elicitation
+      (test-in/print-req stdin "initialize"
+                         {:protocolVersion init/server-protocol-version
+                          :capabilities {:roots {} :sampling {}}
+                          :clientInfo {:name "Test Client" :version "1.0.0"}})
+      (.readLine stdout)
+      (test-in/print-notif stdin "notifications/initialized" nil)
+      (loop [i 0]
+        (when (and (not (::mcp/initialized? @server))
+                   (<= i 100))
+          (Thread/sleep 20)
+          (recur (inc i))))
+      (test-in/print-req stdin "tools/call" {:name "AskName" :arguments {}})
+      (.close stdin)
+      ;; Tool should still complete (with nil from elicitation), no client request emitted
+      (is (match? {"jsonrpc" "2.0"
+                   "result" {"content" [{"text" "done" "type" "text"}]
+                             "isError" false}
+                   "id" int?}
+                  (json/read-json (first (line-seq stdout)))))
+      (is (nil? @tool-result)))))
+
 ;; Invalid method test
 (deftest invalid-method-test
   (is (match? {"jsonrpc" "2.0"

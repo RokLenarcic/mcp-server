@@ -268,6 +268,24 @@
                           :maxTokens max-tokens)
                   progress-callback)))
 
+(defn do-elicitation
+  "Requests structured input from the user via the client (MCP elicitation/create).
+
+   Parameters:
+   - rpc-session: the session atom
+   - message: human-readable prompt
+   - json-schema: JSON Schema map describing expected response shape
+   - progress-callback: optional progress callback (or nil)
+
+   Returns a CompletableFuture containing the elicitation result."
+  [rpc-session message json-schema progress-callback]
+  (log/trace "Requesting elicitation from client - message length:" (count (str message)))
+  (send-request rpc-session
+                "elicitation/create"
+                {:message message
+                 :requestedSchema json-schema}
+                progress-callback))
+
 (defn change-watcher
   "Watcher function that monitors session changes and sends notifications to client."
   [k rpc-session o n]
@@ -317,6 +335,12 @@
     (sampling [this req progress-callback]
       (when (-> @rpc-session ::mcp/client-capabilities :sampling)
         (do-sampling rpc-session req progress-callback)))
+    (elicitation [this message json-schema]
+      (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
+        (do-elicitation rpc-session message json-schema nil)))
+    (elicitation [this message json-schema progress-callback]
+      (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
+        (do-elicitation rpc-session message json-schema progress-callback)))
     (report-progress [this msg]
       (let [progress-token (get-in params [:_meta :progressToken])]
         (when progress-token (notify-progress rpc-session progress-token msg))

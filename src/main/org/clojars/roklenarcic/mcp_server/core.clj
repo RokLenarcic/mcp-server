@@ -38,7 +38,15 @@
      
      sampling-request should be created with the sampling-request function.")
   (^CompletableFuture elicitation [this message json-schema] [this message json-schema progress-callback]
-    "Requests elicitation, ")
+    "Requests structured input from the user via the client (MCP elicitation/create).
+     Returns CompletableFuture with result, or nil if client doesn't support elicitation.
+
+     Parameters:
+     - message: human-readable prompt presented to the user
+     - json-schema: JSON Schema (a map) describing the expected response shape;
+       MCP restricts this to a flat object schema with primitive properties
+
+     If progress-callback is supplied, it will be called when client reports progress.")
   (report-progress [this msg]
     "Reports progress to the client, msg is a map with :progress :total :message keys")
   (^CompletableFuture req-cancelled-future [this] "Returns CompletableFuture that is completed with cancellation message if the request is cancelled"))

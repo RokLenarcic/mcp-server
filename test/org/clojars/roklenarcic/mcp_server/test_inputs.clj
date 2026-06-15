@@ -78,7 +78,7 @@
 (defn initialize [{:keys [server stdin stdout]}]
   (print-req stdin "initialize"
              {:protocolVersion init/server-protocol-version
-              :capabilities {:roots {} :sampling {}}
+              :capabilities {:roots {} :sampling {} :elicitation {}}
               :clientInfo {:name "Test Client" :version "1.0.0"}})
 
   (.readLine stdout)

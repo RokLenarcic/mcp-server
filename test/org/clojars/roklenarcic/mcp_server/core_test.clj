@@ -313,6 +313,8 @@
                           (list-roots [this progress-callback] nil)
                           (sampling [this req] nil)
                           (sampling [this req progress-callback] nil)
+                          (elicitation [this message json-schema] nil)
+                          (elicitation [this message json-schema progress-callback] nil)
                           (report-progress [this msg]
                             (swap! progress-calls conj msg))
                           (req-cancelled-future [this] (CompletableFuture/completedFuture nil)))]
@@ -351,6 +353,8 @@
                           (list-roots [this progress-callback] nil)
                           (sampling [this req] nil)
                           (sampling [this req progress-callback] nil)
+                          (elicitation [this message json-schema] nil)
+                          (elicitation [this message json-schema progress-callback] nil)
                           (report-progress [this msg] false)
                           (req-cancelled-future [this] @cancelled-future))]
 
