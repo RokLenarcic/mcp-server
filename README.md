@@ -574,7 +574,7 @@ arguments (MCP 2025-06-18):
 Completions provide autocomplete functionality:
 
 ```clojure
-(defn completion [exchange name value]
+(defn completion [exchange name value context]
   (core/completion-resp ["completion 1" "completion 2"]))
 
 ;; Add completion for specific prompts or resources
@@ -587,7 +587,7 @@ You can also set a general completion handler for unmatched requests:
 ```clojure
 (server/set-completion-handler
   session
-  (fn [exchange ref-type ref-name name value] 
+  (fn [exchange ref-type ref-name name value context]
     (core/completion-resp ["completion 1" "completion 2"])))
 ```
 
@@ -595,19 +595,15 @@ You can also set a general completion handler for unmatched requests:
 
 MCP 2025-06-18 lets clients send already-resolved arguments along with a
 completion request, so the server can produce context-aware suggestions.
-Use `core/completion-context` from inside a completion handler to read it:
+The trailing `context` argument carries that map (or `nil` when the
+client did not include one). It is shaped like
+`{:arguments {:arg-name "value" ...}}`:
 
 ```clojure
-(defn city-completion [exchange name value]
-  (let [{:keys [arguments]} (core/completion-context exchange)
-        country (get arguments :country)]
+(defn city-completion [exchange name value context]
+  (let [country (get-in context [:arguments :country])]
     (core/completion-resp (cities-in country value))))
 ```
-
-The handler arity is unchanged — context is exposed through the
-`exchange` (via request metadata) so existing handlers keep working
-without modification. `completion-context` returns `nil` when the client
-did not include a context.
 
 ## Titles and Metadata
 

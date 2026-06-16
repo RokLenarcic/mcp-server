@@ -149,9 +149,11 @@
    - session: the session atom
    - ref-type: type of reference (e.g., \"resource\", \"prompt\", \"tool\")
    - ref-name: name of the specific reference
-   - handler: completion handler function (fn [exchange name value] core/completion-resp).
-     Use core/completion-context with the exchange to read previously
-     resolved arguments from the client.
+   - handler: completion handler function
+              (fn [exchange name value context] core/completion-resp).
+              context is the optional :context map sent by the client
+              (MCP 2025-06-18) carrying previously-resolved arguments under
+              :arguments, or nil if the client did not include one.
 
    Returns the updated session atom."
   [session ref-type ref-name handler]
@@ -180,9 +182,11 @@
    Parameters:
    - session: the session atom
    - handler: general completion handler function
-              (fn [exchange ref-type ref-name name value] core/completion-resp)
-              or nil to unset. Use core/completion-context with the exchange
-              to read previously resolved arguments from the client.
+              (fn [exchange ref-type ref-name name value context] core/completion-resp)
+              or nil to unset. context is the optional :context map sent by
+              the client (MCP 2025-06-18) carrying previously-resolved
+              arguments under :arguments, or nil if the client did not
+              include one.
 
    Returns the session atom."
   [session handler]

@@ -548,7 +548,7 @@
     (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
       (test-in/initialize s)
       (server/add-completion server "ref/prompt" "test-prompt"
-                             (fn [exchange name value]
+                             (fn [exchange name value _context]
                                (c/completion-resp ["AAAA" "CCC"])))
       (test-in/print-req stdin "completion/complete"
                          {:ref {:type "ref/prompt" :name "test-prompt"}
@@ -572,10 +572,10 @@
     (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
       (test-in/initialize s)
       (server/add-completion server "ref/prompt" "test-prompt"
-                             (fn [exchange name value]
+                             (fn [exchange name value _context]
                                (c/completion-resp ["AAAA" "CCC"])))
       (server/set-completion-handler server
-                                     (fn [exchange p1 p2 p3 p4]
+                                     (fn [exchange p1 p2 p3 p4 _context]
                                        (c/completion-resp [p1 p2 p3 p4])))
       (test-in/print-req stdin "completion/complete"
                          {:ref {:type "ref/prompt" :name "test-prompt"}
@@ -595,13 +595,13 @@
                                       "values" ["ref/prompt" "unknown-prompt" "arg1" "test"]}}
               "id" int?
               "jsonrpc" "2.0"}] (mapv json/read-json (line-seq stdout))))))
-  (testing "Completion request forwards :context to handler via core/completion-context"
+  (testing "Completion :context is passed to specific handler as trailing positional arg"
     (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
           captured (atom [])]
       (test-in/initialize s)
       (server/add-completion server "ref/prompt" "ctx-prompt"
-                             (fn [exchange _name _value]
-                               (swap! captured conj (c/completion-context exchange))
+                             (fn [_exchange _name _value context]
+                               (swap! captured conj context)
                                (c/completion-resp ["X"])))
       (test-in/print-req stdin "completion/complete"
                          {:ref {:type "ref/prompt" :name "ctx-prompt"}
@@ -613,6 +613,26 @@
       (.close stdin)
       (is (match? [{"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}
                    {"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["X"]}}}]
+                  (mapv json/read-json (line-seq stdout))))
+      (is (= [{:arguments {:arg1 "v1"}} nil] @captured))))
+  (testing "Completion :context is passed to general handler as trailing positional arg"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          captured (atom [])]
+      (test-in/initialize s)
+      (server/set-completion-handler server
+                                     (fn [_exchange _ref-type _ref-name _name _value context]
+                                       (swap! captured conj context)
+                                       (c/completion-resp ["G"])))
+      (test-in/print-req stdin "completion/complete"
+                         {:ref {:type "ref/prompt" :name "any"}
+                          :argument {:name "arg2" :value "v2"}
+                          :context {:arguments {:arg1 "v1"}}})
+      (test-in/print-req stdin "completion/complete"
+                         {:ref {:type "ref/prompt" :name "any"}
+                          :argument {:name "arg1" :value "v1"}})
+      (.close stdin)
+      (is (match? [{"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["G"]}}}
+                   {"id" int? "jsonrpc" "2.0" "result" {"completion" {"values" ["G"]}}}]
                   (mapv json/read-json (line-seq stdout))))
       (is (= [{:arguments {:arg1 "v1"}} nil] @captured))))
   (testing "Inbound request :_meta is exposed to handlers via core/request-_meta verbatim"

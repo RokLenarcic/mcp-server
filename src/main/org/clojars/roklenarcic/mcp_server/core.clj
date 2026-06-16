@@ -289,23 +289,6 @@
     :total total
     :hasMore has-more?}))
 
-(defn completion-context
-  "Returns the completion context for the current request, or nil if absent.
-
-   The MCP completion/complete request can include a :context map with
-   :arguments — previously resolved argument values that the client
-   collected before triggering completion. The server forwards this map
-   through the request metadata so completion handlers can use it without
-   any change in handler arity.
-
-   Parameters:
-   - exchange: the RequestExchange passed to a completion handler
-
-   Returns: a map shaped like {:arguments {:arg-name \"value\" ...}}, or nil
-   if the client did not include a context."
-  [exchange]
-  (-> (req-meta exchange) ::mcp/completion-context))
-
 (defn request-_meta
   "Returns the inbound :_meta map from the current MCP request, or nil if
    the client did not include one (MCP 2025-06-18).
