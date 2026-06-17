@@ -244,17 +244,35 @@
       (is (= 123 (:id response))))))
 
 (deftest client-request-management-test
-  (testing "Client request cleanup"
-    ;; Test the cleanup mechanism
-    (let [initial-size (.size @#'rpc/client-req-pending)]
-      ;; Add some expired entries manually for testing
-      (.offer @#'rpc/client-req-queue [(- (System/currentTimeMillis) 200000) 999])
-      
-      ;; Run cleanup with 100 second timeout
+  (testing "Client request cleanup expires composite-keyed pending futures"
+    ;; Isolate from other tests that may have populated the global queue with
+    ;; unexpired entries — cleanup bails on the first non-expired head entry.
+    (.clear @#'rpc/client-req-queue)
+    (.clear @#'rpc/client-req-pending)
+    (let [session-key "test-session-cleanup"
+          composite-key [999 session-key]
+          fut (CompletableFuture.)]
+      ;; Manually add an expired entry to both the queue and the pending map.
+      (.put @#'rpc/client-req-pending composite-key fut)
+      (.offer @#'rpc/client-req-queue
+              [(- (System/currentTimeMillis) 200000) 999 session-key])
+      ;; Bypass the 500ms throttle so cleanup actually runs.
+      (reset! @#'rpc/last-cleanup 0)
       (rpc/cleanup-requests 100000)
-      
-      ;; The cleanup should have processed the queue
-      (is (>= (.size @#'rpc/client-req-pending) 0)))))
+      ;; Entry is removed from the pending map and the future completes
+      ;; exceptionally with a TimeoutException.
+      (is (nil? (.get @#'rpc/client-req-pending composite-key)))
+      (is (.isDone fut))
+      (is (.isCompletedExceptionally fut))))
+
+  (testing "client-req-key uses session id when present, atom identity otherwise"
+    (let [http-session (atom {::mcp/id "abc"})
+          stream-session (atom {})]
+      (is (= [42 "abc"] (rpc/client-req-key http-session 42)))
+      (is (= [42 stream-session] (rpc/client-req-key stream-session 42)))
+      ;; Two separate stream sessions get distinct keys via atom identity.
+      (is (not= (rpc/client-req-key (atom {}) 42)
+                (rpc/client-req-key (atom {}) 42))))))
 
 (deftest middleware-test
   (testing "Apply single middleware"
@@ -314,15 +332,35 @@
       (is (.contains (:message result) "unknown-method")))))
 
 (deftest handle-client-response-test
-  (testing "Handle client success response"
-    ;; This test verifies the handler function structure
-    (let [result (rpc/handle-client-response {} nil {:result {:success true} :id 123})]
-      ;; Should return nil since it's a notification handler
-      (is (nil? result))))
+  (testing "Response for an id with no matching pending future is silently ignored"
+    (let [session (atom {::mcp/id "no-such-pending"})]
+      (is (nil? (rpc/handle-client-response session nil {:result {:success true} :id 9999})))
+      (is (nil? (rpc/handle-client-response session nil {:error {:code -1 :message "oops"} :id 9999})))))
 
-  (testing "Handle client error response"
-    (let [result (rpc/handle-client-response {} nil {:error {:code -1 :message "client error"} :id 456})]
-      (is (nil? result)))))
+  (testing "Response for the originating session completes the pending future"
+    (let [session (atom {::mcp/id "session-A"})
+          fut (CompletableFuture.)
+          composite-key (rpc/client-req-key session 4242)]
+      (.put @#'rpc/client-req-pending composite-key fut)
+      (rpc/handle-client-response session nil {:result {:value 99} :id 4242})
+      (is (.isDone fut))
+      (is (= {:value 99} (.get fut)))
+      (is (nil? (.get @#'rpc/client-req-pending composite-key)))))
+
+  (testing "Response delivered on a different session does not complete the future"
+    (let [session-a (atom {::mcp/id "session-A"})
+          session-b (atom {::mcp/id "session-B"})
+          fut (CompletableFuture.)
+          key-a (rpc/client-req-key session-a 7777)]
+      (.put @#'rpc/client-req-pending key-a fut)
+      ;; Response arrives on session B with the same id — must be ignored.
+      (is (nil? (rpc/handle-client-response session-b nil {:result {:hijacked true} :id 7777})))
+      (is (not (.isDone fut)))
+      (is (some? (.get @#'rpc/client-req-pending key-a)))
+      ;; Now the legitimate session A response completes it.
+      (rpc/handle-client-response session-a nil {:result {:legit true} :id 7777})
+      (is (.isDone fut))
+      (is (= {:legit true} (.get fut))))))
 
 (deftest base-session-test
   (testing "Create base session"

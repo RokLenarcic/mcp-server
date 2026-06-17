@@ -17,10 +17,24 @@
   (atom 0))
 
 (def ^ConcurrentHashMap client-req-pending
-  "Map of pending client requests by ID to their CompletableFuture objects."
+  "Map of pending client requests, keyed by [request-id session-key], where
+  session-key is the HTTP session id (string) for Streamable HTTP transports
+  or the session atom identity for stream/stdio transports.
+
+  Composite keys prevent a response delivered on session B from completing a
+  pending request that originated on session A."
   (ConcurrentHashMap.))
 
 (def last-cleanup (atom 0))
+
+(defn client-req-key
+  "Builds the composite key used by `client-req-pending` for a request.
+
+  Uses the HTTP session id (`::mcp/id`) when present, otherwise falls back to
+  the session atom identity so non-HTTP transports (stdio, streams) still get
+  a stable per-session key."
+  [rpc-session id]
+  [(long id) (or (::mcp/id @rpc-session) rpc-session)])
 
 (defn cleanup-requests
   "Removes expired client requests from the queue and completes them with timeout errors.
@@ -33,16 +47,17 @@
   (let [t (System/currentTimeMillis)
         iter (.iterator ^ConcurrentLinkedQueue client-req-queue)
         expired-ts (- t expire-ms)
-        expired-id (fn [[created-ts id]] (when (< created-ts expired-ts) id))]
+        expired-key (fn [[created-ts id session-key]]
+                      (when (< created-ts expired-ts) [id session-key]))]
     ;; throttle to once per 500ms
     (when (= t (swap! last-cleanup #(if (= (quot % 500) (quot t 500)) % t)))
       (log/trace "Cleaning up client requests older than" expire-ms "ms")
       (loop [expired-count 0]
-        (if-let [id (and (.hasNext iter) (expired-id (.next iter)))]
+        (if-let [key (and (.hasNext iter) (expired-key (.next iter)))]
           (do
             (.remove iter)
-            (when-let [fut (.remove client-req-pending id)]
-              (log/debug "Timing out client request with id:" id)
+            (when-let [fut (.remove client-req-pending key)]
+              (log/debug "Timing out client request with key:" key)
               (.completeExceptionally ^CompletableFuture fut (TimeoutException. "Client Request Timed Out")))
             (recur (inc expired-count)))
           (when (> expired-count 0)
@@ -171,14 +186,21 @@
 
 (defn handle-client-response
   "Handles responses from the client to our requests.
-   
+
    Parameters:
-   - _: unused context parameter
+   - context: the session atom — used to derive the composite pending-key
+   - _req-meta: unused
    - params: response parameters containing :error, :result, and :id
-   
+
+   The pending future is looked up by `[id session-key]`, so a response
+   delivered on a different session than the one that issued the request is
+   silently ignored (returns nil, which the HTTP transport maps to 202).
+
    Returns nil (this is a notification handler)."
-  [_ _ {:keys [error result id] :as params}]
-  (when-let [^CompletableFuture cb (and params id (.remove client-req-pending (long id)))]
+  [context _ {:keys [error result id] :as params}]
+  (when-let [^CompletableFuture cb (and params id
+                                        (.remove client-req-pending
+                                                 (client-req-key context id)))]
     (log/debug "Handling client response for id:" id "error:" (some? error))
     (if-let [{:keys [code message data]} error]
       (do
@@ -270,10 +292,11 @@
               (cancel [interrupt-if-running]
                 (when interrupt-if-running (cancel-handler id))
                 (.completeExceptionally ^CompletableFuture this (CancellationException.))))
-        req (?assoc {:jsonrpc "2.0" :id id :method method} :params params)]
+        req (?assoc {:jsonrpc "2.0" :id id :method method} :params params)
+        [_ session-key :as pending-key] (client-req-key rpc-session id)]
     (log/debug "Sending request:" method "with id:" id "params:" (some? params))
     (send-to-client (json-serialize serde req))
-    (.offer client-req-queue [(System/currentTimeMillis) id])
-    (.put client-req-pending id fut)
+    (.offer client-req-queue [(System/currentTimeMillis) id session-key])
+    (.put client-req-pending pending-key fut)
     (log/debug "Request" id "queued, pending responses:" (.size client-req-pending))
     fut))
