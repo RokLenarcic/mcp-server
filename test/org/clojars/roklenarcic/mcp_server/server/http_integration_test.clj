@@ -545,6 +545,52 @@
         (finally
           (stop-test-server server-info))))))
 
+(deftest http-init-failure-no-session-leak-test
+  (testing "Initialize with an unsupported protocol version does not leave a session in the store"
+    (let [session-template (create-test-session)
+          server-info (start-test-server session-template)]
+      (try
+        (let [response (post-request base-url
+                                     {:jsonrpc "2.0"
+                                      :method "initialize"
+                                      :params {:protocolVersion "1999-01-01"
+                                               :capabilities {}
+                                               :clientInfo {:name "Test" :version "1.0.0"}}
+                                      :id 1})]
+          (is (= 200 (:status response)))
+          (is (nil? (get-in response [:headers "mcp-session-id"]))
+              "Mcp-Session-Id header must NOT be sent on init failure")
+          (is (match? {"jsonrpc" "2.0"
+                       "error" {"code" -32600 "message" "Invalid Request"}
+                       "id" 1}
+                      (json/read-json (:body response))))
+          (is (empty? (http/all-sessions (:sessions server-info)))
+              "No session must be left in the store after a failed initialize"))
+        (finally
+          (stop-test-server server-info))))))
+
+(deftest http-delete-detaches-sse-stream-test
+  (testing "DELETE /mcp detaches an attached SSE stream from the session"
+    (let [session-template (create-test-session)
+          server-info (start-test-server session-template)
+          session-id (initialize-session)
+          session (http/get-session (:sessions server-info) session-id)
+          os (java.io.ByteArrayOutputStream.)]
+      (try
+        ;; Pretend an SSE stream is attached.
+        (swap! session assoc ::mcp/os os)
+        (is (some? (::mcp/os @session)))
+
+        (let [response (delete-request base-url {"Mcp-Session-Id" session-id})]
+          (is (= 200 (:status response))))
+
+        (is (nil? (http/get-session (:sessions server-info) session-id))
+            "Session removed from store")
+        (is (nil? (::mcp/os @session))
+            "Attached SSE stream is detached on DELETE")
+        (finally
+          (stop-test-server server-info))))))
+
 (deftest http-protocol-version-negotiation-test
   (testing "Initialize accepts the supported protocol version"
     (let [session-template (create-test-session)

@@ -20,7 +20,7 @@
             [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
   (:import (java.security SecureRandom)
            (java.util Base64)
-           (java.util.concurrent CompletableFuture ConcurrentHashMap ConcurrentLinkedQueue)))
+           (java.util.concurrent CompletableFuture ConcurrentHashMap LinkedBlockingDeque)))
 
 ;; --- session id generation -------------------------------------------------
 
@@ -36,9 +36,11 @@
   (get-session [this session-id]
     "Returns the session atom for `session-id`, or nil.")
   (delete-session [this session-id]
-    "Removes the session and returns the removed value, or nil.")
+    "Removes the session and returns the removed session atom, or nil.")
   (add-session [this session]
-    "Adds `session` to the store, assigning ::mcp/id; returns the session atom.")
+    "Registers `session` in the store using its existing ::mcp/id; returns the
+    session atom. Callers must have set ::mcp/id beforehand (typically via
+    `create-session`).")
   (all-sessions [this]
     "Returns a seq of all active session atoms."))
 
@@ -49,12 +51,10 @@
     (log/trace "Deleting session:" session-id)
     (.remove storage session-id))
   (add-session [_ session]
-    (let [session-id (new-session-id)]
-      (swap! session assoc
-             ::mcp/id session-id
-             ::mcp/session-creation-time (System/currentTimeMillis))
+    (let [session-id (::mcp/id @session)]
+      (assert session-id "session must have ::mcp/id set before being added")
       (.put storage session-id session)
-      (log/debug "Session created:" session-id)
+      (log/debug "Session registered:" session-id)
       session))
   (all-sessions [_]
     (iterator-seq (.iterator (.values storage)))))
@@ -117,13 +117,22 @@
 ;; --- session creation ------------------------------------------------------
 
 (defn create-session
-  "Builds a fresh HTTP session atom from `session-map`, wiring in the SSE
-  send-to-client function, the outbound queue, and the change watcher."
+  "Builds a fresh HTTP session atom from `session-map`, assigning a new
+  `::mcp/id`, wiring in the SSE send-to-client function, the bounded outbound
+  queue, and the change watcher. The session is NOT added to any store; the
+  caller decides when (and whether) to register it via `add-session`.
+
+  The outbound queue is bounded by `::mcp/sse-queue-capacity` (default 1024)
+  so a slow or disconnected client cannot grow memory without bound; when the
+  queue is full the oldest queued message is dropped to make room."
   [session-map]
-  (let [session (atom session-map)]
+  (let [capacity (or (::mcp/sse-queue-capacity session-map) 1024)
+        session (atom session-map)]
     (swap! session assoc
+           ::mcp/id (new-session-id)
+           ::mcp/session-creation-time (System/currentTimeMillis)
            ::mcp/send-to-client (sse/send-to-client-fn session)
-           ::mcp/q (ConcurrentLinkedQueue.))
+           ::mcp/q (LinkedBlockingDeque. (int capacity)))
     (add-watch session ::watcher handler/change-watcher)
     session))
 
@@ -156,7 +165,13 @@
 
 (defn- handle-init-post
   "Handles a POST that arrived without an Mcp-Session-Id header; the only
-  acceptable payload is a valid initialize request."
+  acceptable payload is a valid initialize request.
+
+  The new session is created up front so the initialize handler can mutate
+  it, but it is only registered with the session store (and its
+  Mcp-Session-Id returned to the client) when the handler produces a success
+  response. A handler-level error (e.g. unsupported protocolVersion) leaves
+  the store untouched."
   [req sessions session-map]
   (let [serde (::mcp/serde session-map)
         parsed (parse-body req serde)]
@@ -166,12 +181,16 @@
 
       (and (= :request (:item-type parsed))
            (= "initialize" (:method parsed)))
-      (let [session (add-session sessions (create-session session-map))
-            session-id (::mcp/id @session)]
+      (let [session (create-session session-map)]
         (papply (rpc/handle-parsed parsed (::mcp/dispatch-table session-map) session req)
                 (fn [r]
-                  (-> (json-resp 200 r serde)
-                      (assoc-in [:headers "Mcp-Session-Id"] session-id)))))
+                  (if (and (map? r) (not (:error r)))
+                    (do (add-session sessions session)
+                        (-> (json-resp 200 r serde)
+                            (assoc-in [:headers "Mcp-Session-Id"] (::mcp/id @session))))
+                    ;; Handler-level error: do not register the session and
+                    ;; do not send back an Mcp-Session-Id header.
+                    (json-resp 200 r serde)))))
 
       :else
       (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
@@ -195,9 +214,11 @@
    :body (sse/get-resp session sync?)})
 
 (defn- handle-delete
-  "Terminates the named session and returns 200."
+  "Terminates the named session: removes it from the store and detaches any
+  attached SSE stream so writers see ::mcp/os = nil and stop. Returns 200."
   [sessions session-id]
-  (delete-session sessions session-id)
+  (when-let [session (delete-session sessions session-id)]
+    (some->> @session ::mcp/os (sse/close-os session)))
   (empty-resp 200))
 
 ;; --- routing ---------------------------------------------------------------
@@ -302,14 +323,20 @@
   - opts: option map
     - :allowed-origins - collection of allowed Origin headers (nil permits all)
     - :client-req-timeout-ms - client request timeout in ms (default 120000)
+    - :sse-queue-capacity - max number of messages buffered per session while
+      no SSE stream is attached (default 1024). When full, the oldest queued
+      message is dropped to make room for the newest.
 
   Returns a Ring handler that supports both 1-arity (synchronous) and
   3-arity (asynchronous) Ring operation."
-  [session-template sessions {:keys [allowed-origins client-req-timeout-ms]}]
+  [session-template sessions {:keys [allowed-origins client-req-timeout-ms sse-queue-capacity]}]
   (log/debug "Creating Ring handler for MCP Streamable HTTP")
   (let [origins (if allowed-origins (set allowed-origins) (constantly true))
         timeout (or client-req-timeout-ms 120000)
-        session-map-of #(assoc @session-template ::mcp/timeout-ms timeout)]
+        capacity (or sse-queue-capacity 1024)
+        session-map-of #(assoc @session-template
+                               ::mcp/timeout-ms timeout
+                               ::mcp/sse-queue-capacity capacity)]
     (fn
       ([req]
        (rpc/cleanup-requests timeout)
