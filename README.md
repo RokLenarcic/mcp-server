@@ -17,7 +17,7 @@ org.clojars.roklenarcic/mcp-server {:mvn/version "0.2.14"}
 - [Current Alpha Limitations](#current-alpha-limitations)
 - [Quick Start](#quick-start)
 - [Alternative: Manual Configuration](#alternative-manual-configuration)
-- [HTTP/SSE Transport](#httpsse-transport)
+- [Streamable HTTP Transport](#streamable-http-transport)
 - [JSON Serializers](#json-serializers)
 - [Key Namespaces](#key-namespaces)
 - [Session Management](#session-management)
@@ -162,9 +162,9 @@ Since sessions are just maps, you can build them manually instead of using the h
 
 The dispatch table is a lookup map that routes JSON-RPC calls to their handlers.
 
-## HTTP/SSE Transport
+## Streamable HTTP Transport
 
-For HTTP-based communication with SSE streaming, use `ring-handler` from the HTTP transport namespace. This creates a standard Ring handler that you can mount in any Ring-compatible HTTP server:
+For HTTP-based communication, use `ring-handler` from the HTTP transport namespace. This implements the MCP 2025-06-18 Streamable HTTP transport on a single endpoint that handles three methods: `POST` for client to server JSON-RPC, `GET` for a server to client SSE stream, and `DELETE` to terminate a session. The result is a standard Ring handler that you can mount in any Ring-compatible HTTP server:
 
 ```clojure
 (ns example.http-server
@@ -192,7 +192,10 @@ The `ring-handler` supports both synchronous and asynchronous Ring operation. Th
 Options:
 - `:allowed-origins` — collection of allowed Origin headers (`nil` permits all origins)
 - `:client-req-timeout-ms` — timeout for client requests in milliseconds (default: 120000)
-- `:endpoint` — optional endpoint information for SSE connections
+
+### Protocol headers
+
+After the initialize handshake the server returns a `Mcp-Session-Id` header. Clients **must** include that header on every subsequent `POST`, `GET`, and `DELETE` request, and **should** include `MCP-Protocol-Version: 2025-06-18` on non-initialize requests. `POST` requests must declare `Content-Type: application/json` and `Accept: application/json, text/event-stream`; `GET` requests must declare `Accept: text/event-stream`. Requests carrying an unknown session id receive `404 Not Found`; mismatched headers return `400 Bad Request` or `406 Not Acceptable`.
 
 ## JSON Serializers
 

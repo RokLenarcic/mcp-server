@@ -1,90 +1,124 @@
 (ns org.clojars.roklenarcic.mcp-server.server.http
-  "This namespace provides HTTP-based transport for the MCP server using Ring.
-  It handles HTTP requests, session management, CORS, and integrates with SSE
-  for streaming communication. Supports both synchronous and asynchronous request handling."
-  (:require [clojure.tools.logging :as log]
+  "Streamable HTTP transport for MCP 2025-06-18.
+
+  A single endpoint exposes three HTTP methods:
+  - POST   - client to server JSON-RPC requests, notifications, and responses
+  - GET    - long-lived SSE stream for server to client messages
+  - DELETE - terminate the session
+
+  After the initialize handshake the server returns a Mcp-Session-Id header;
+  clients MUST include that header on every subsequent request and SHOULD
+  include MCP-Protocol-Version: 2025-06-18."
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
-            [org.clojars.roklenarcic.mcp-server.core :as c]
-            [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
-            [org.clojars.roklenarcic.mcp-server.server.sse :as sse]
             [org.clojars.roklenarcic.mcp-server.handler.common :as handler]
+            [org.clojars.roklenarcic.mcp-server.handler.init :as init]
+            [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
+            [org.clojars.roklenarcic.mcp-server.json-rpc.parse :as parse]
+            [org.clojars.roklenarcic.mcp-server.server.sse :as sse]
             [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
   (:import (java.security SecureRandom)
            (java.util Base64)
            (java.util.concurrent CompletableFuture ConcurrentHashMap ConcurrentLinkedQueue)))
+
+;; --- session id generation -------------------------------------------------
 
 (defn- new-session-id []
   (let [buffer (byte-array 32)]
     (.nextBytes (SecureRandom.) buffer)
     (.encodeToString (Base64/getUrlEncoder) buffer)))
 
-(defprotocol Sessions
-  "Protocol for session storage implementations."
-  (get-session [this session-id]
-  "Retrieves a session by ID. Returns nil if not found.")
-  (delete-session [this session-id] 
-    "Removes a session by ID. Returns the removed session or nil.")
-  (add-session [this session]
-    "Adds a session to the store, adds mcp/id to the session, returns the session atom.")
-  (all-sessions [this] 
-    "Returns a collection of all active sessions."))
+;; --- Sessions protocol & in-memory implementation --------------------------
 
-(defrecord MemorySessionStore
-  [^ConcurrentHashMap storage]
-  Sessions
-  (get-session [this session-id] (.get storage session-id))
+(defprotocol Sessions
+  "Storage for HTTP transport sessions."
+  (get-session [this session-id]
+    "Returns the session atom for `session-id`, or nil.")
   (delete-session [this session-id]
+    "Removes the session and returns the removed value, or nil.")
+  (add-session [this session]
+    "Adds `session` to the store, assigning ::mcp/id; returns the session atom.")
+  (all-sessions [this]
+    "Returns a seq of all active session atoms."))
+
+(defrecord MemorySessionStore [^ConcurrentHashMap storage]
+  Sessions
+  (get-session [_ session-id] (.get storage session-id))
+  (delete-session [_ session-id]
     (log/trace "Deleting session:" session-id)
     (.remove storage session-id))
-  (add-session [this session]
+  (add-session [_ session]
     (let [session-id (new-session-id)]
       (swap! session assoc
              ::mcp/id session-id
              ::mcp/session-creation-time (System/currentTimeMillis))
       (.put storage session-id session)
-      (log/debug "Session created with ID:" session-id)
+      (log/debug "Session created:" session-id)
       session))
-  (all-sessions [this] 
-    (log/debug "Retrieving all sessions - count:" (.size storage))
+  (all-sessions [_]
     (iterator-seq (.iterator (.values storage)))))
 
+(defn memory-sessions-store
+  "An in-memory Sessions store backed by ConcurrentHashMap."
+  []
+  (->MemorySessionStore (ConcurrentHashMap.)))
+
+;; --- header helpers --------------------------------------------------------
+
+(defn- header
+  "Lowercase header lookup."
+  [req name]
+  (get-in req [:headers name]))
+
+(defn- accepts?
+  "True when `accept-header` lists `mime-type` or */*."
+  [accept-header mime-type]
+  (boolean
+    (when accept-header
+      (some (fn [^String part]
+              (let [media (-> part (str/split #";") first str/trim)]
+                (or (= media mime-type) (= media "*/*"))))
+            (str/split accept-header #",")))))
+
+(defn- json-content-type?
+  "True when the request declares Content-Type: application/json."
+  [req]
+  (boolean
+    (when-let [ct (header req "content-type")]
+      (str/starts-with? (str/trim ct) "application/json"))))
+
+(defn- protocol-version-ok?
+  "Accept the request when MCP-Protocol-Version is absent or matches a
+  supported version."
+  [req]
+  (let [hdr (header req "mcp-protocol-version")]
+    (or (nil? hdr) (boolean (init/allowed-protocol-versions hdr)))))
+
+;; --- response builders -----------------------------------------------------
+
 (defn json-resp
-  "Creates a JSON HTTP response.
-   
-   Parameters:
-   - status: HTTP status code
-   - body: response body to serialize as JSON
-   - serde: JSON serialization implementation
-   
-   Returns a Ring response map."
+  "Builds a Ring response with `body` serialized as JSON."
   [status body serde]
-  {:body (rpc/json-serialize serde body)
-   :status status
+  {:status status
+   :body (rpc/json-serialize serde body)
    :headers {"Content-Type" "application/json"}})
 
-(defn process
-  "Processes an HTTP request containing an MCP JSON-RPC message.
-   
-   Parameters:
-   - req: Ring request map
-   - session: session atom for this request
-   
-   Returns a processed response or CompletableFuture."
-  [req session]
-  (try
-    (let [{::mcp/keys [dispatch-table serde]} @session
-          msg (slurp (:body req))]
-      (log/debug "Processing request" msg)
-      (rpc/handle-parsed (rpc/parse-string msg serde) dispatch-table session req))
-    (catch Exception e
-      (log/error e)
-      (c/internal-error nil (ex-message e)))))
+(defn- empty-resp [status]
+  {:status status :body "" :headers {}})
+
+(defn- error-resp
+  "Builds a JSON Ring response carrying a JSON-RPC error object."
+  ([status code message data serde]
+   (error-resp status code message data nil serde))
+  ([status code message data id serde]
+   (json-resp status (rpc/make-error-response code message data id) serde)))
+
+;; --- session creation ------------------------------------------------------
 
 (defn create-session
-  "Creates a session for HTTP transport.
-
-   Parameters:
-   - session-map: a map that is basis for a session"
+  "Builds a fresh HTTP session atom from `session-map`, wiring in the SSE
+  send-to-client function, the outbound queue, and the change watcher."
   [session-map]
   (let [session (atom session-map)]
     (swap! session assoc
@@ -93,146 +127,196 @@
     (add-watch session ::watcher handler/change-watcher)
     session))
 
-(defn handle-init
-  "Handles MCP initialization requests that create new sessions.
-   
-   Parameters:
-   - req: Ring request map
-   - sessions: session storage implementation
-   - session-map: map that can be used to create a session
-   
-   Returns a Ring response map with session ID header."
-  [req sessions session-map]
-  (let [{::mcp/keys [dispatch-table serde]} session-map
-        msg (slurp (:body req))
-        _ (log/trace "Init message length:" (count msg))
-        parsed (rpc/parse-string msg serde)]
-    
-    (if (and (= :post (:request-method req))
-             (= :request (:item-type parsed))
-             (= "initialize" (:method parsed))
-             (some? (:id parsed)))
-      (do
-        (log/debug "Valid initialization request, creating new session")
-        (let [new-session (add-session sessions (create-session session-map))
-              response (rpc/handle-parsed parsed dispatch-table new-session req)
-              session-id (::mcp/id @new-session)]
-          (log/debug "Session initialized successfully with ID:" session-id)
-          (-> (json-resp 200 response serde)
-              (assoc-in [:headers "Mcp-Session-Id"] session-id))))
-      (json-resp 400 "Bad Request" serde))))
+;; --- request body parsing --------------------------------------------------
 
-(defn- parse-param-session-id [req]
-  (some->> (:query-string req)
-           (re-find #"sessionId=(.*)")
-           second))
+(defn- parse-body [req serde]
+  (let [msg (slurp (:body req))]
+    (log/debug "Received message length:" (count msg))
+    (rpc/parse-string msg serde)))
+
+;; --- per-method handlers ---------------------------------------------------
+
+(defn- post-response
+  "Maps a dispatched POST result to a Ring response, given the original
+  parsed item-type. Argument order matches `papply`: the dispatched value
+  arrives first."
+  [resp item-type serde]
+  (cond
+    ;; Parse / invalid-request errors -> 400 + JSON-RPC error body.
+    (= :error item-type)
+    (json-resp 400 resp serde)
+
+    ;; Notifications and client responses -> 202 no body.
+    (nil? resp)
+    (empty-resp 202)
+
+    ;; Regular request response -> 200 + JSON body.
+    :else
+    (json-resp 200 resp serde)))
+
+(defn- handle-init-post
+  "Handles a POST that arrived without an Mcp-Session-Id header; the only
+  acceptable payload is a valid initialize request."
+  [req sessions session-map]
+  (let [serde (::mcp/serde session-map)
+        parsed (parse-body req serde)]
+    (cond
+      (= :error (:item-type parsed))
+      (json-resp 400 {:jsonrpc "2.0" :error (:error parsed) :id (:id parsed)} serde)
+
+      (and (= :request (:item-type parsed))
+           (= "initialize" (:method parsed)))
+      (let [session (add-session sessions (create-session session-map))
+            session-id (::mcp/id @session)]
+        (papply (rpc/handle-parsed parsed (::mcp/dispatch-table session-map) session req)
+                (fn [r]
+                  (-> (json-resp 200 r serde)
+                      (assoc-in [:headers "Mcp-Session-Id"] session-id)))))
+
+      :else
+      (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                  "Mcp-Session-Id header required" (:id parsed) serde))))
+
+(defn- handle-session-post
+  "Handles a POST routed to an existing session: parse, dispatch, respond."
+  [req session]
+  (let [{::mcp/keys [dispatch-table serde]} @session
+        parsed (parse-body req serde)]
+    (papply (rpc/handle-parsed parsed dispatch-table session req)
+            post-response (:item-type parsed) serde)))
+
+(defn- handle-get
+  "Handles a GET routed to an existing session: open an SSE stream that
+  carries server-originated requests and notifications."
+  [req session sync?]
+  (.close (:body req))
+  {:status 200
+   :headers sse/streaming-headers
+   :body (sse/get-resp session sync?)})
+
+(defn- handle-delete
+  "Terminates the named session and returns 200."
+  [sessions session-id]
+  (delete-session sessions session-id)
+  (empty-resp 200))
+
+;; --- routing ---------------------------------------------------------------
+
+(defn- post-headers-error
+  "Validates POST headers; returns a Ring error response if invalid, nil
+  otherwise."
+  [req serde]
+  (cond
+    (not (json-content-type? req))
+    (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                "Content-Type must be application/json" serde)
+
+    (let [accept (header req "accept")]
+      (not (and (accepts? accept "application/json")
+                (accepts? accept "text/event-stream"))))
+    (error-resp 406 parse/INVALID_REQUEST "Not Acceptable"
+                "Accept must include application/json and text/event-stream"
+                serde)))
+
+(defn- route-post
+  [req sessions session-map]
+  (let [serde (::mcp/serde session-map)]
+    (or (post-headers-error req serde)
+        (if-let [session-id (header req "mcp-session-id")]
+          (if-let [session (get-session sessions session-id)]
+            (if (protocol-version-ok? req)
+              (handle-session-post req session)
+              (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                          (str "Unsupported MCP-Protocol-Version: "
+                               (header req "mcp-protocol-version"))
+                          serde))
+            (error-resp 404 parse/INVALID_REQUEST "Not Found"
+                        "Session not found" serde))
+          (handle-init-post req sessions session-map)))))
+
+(defn- route-get
+  [req sessions session-map sync?]
+  (let [serde (::mcp/serde session-map)]
+    (cond
+      (not (accepts? (header req "accept") "text/event-stream"))
+      (error-resp 406 parse/INVALID_REQUEST "Not Acceptable"
+                  "Accept must include text/event-stream" serde)
+
+      :else
+      (if-let [session-id (header req "mcp-session-id")]
+        (if-let [session (get-session sessions session-id)]
+          (if (protocol-version-ok? req)
+            (handle-get req session sync?)
+            (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                        (str "Unsupported MCP-Protocol-Version: "
+                             (header req "mcp-protocol-version"))
+                        serde))
+          (error-resp 404 parse/INVALID_REQUEST "Not Found"
+                      "Session not found" serde))
+        (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                    "Mcp-Session-Id header required" serde)))))
+
+(defn- route-delete
+  [req sessions session-map]
+  (let [serde (::mcp/serde session-map)]
+    (if-let [session-id (header req "mcp-session-id")]
+      (if (get-session sessions session-id)
+        (handle-delete sessions session-id)
+        (error-resp 404 parse/INVALID_REQUEST "Not Found"
+                    "Session not found" serde))
+      (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                  "Mcp-Session-Id header required" serde))))
 
 (defn handle-common
-  "Handles common HTTP request patterns for MCP over HTTP.
-   
-   Parameters:
-   - req: Ring request map
-   - origins: set of allowed origins or function that returns true for all
-   - sessions: session storage implementation
-   - session-map: basic session map, basis for new sessions
-   - endpoint: optional endpoint information for SSE
-   - sync?: whether to use synchronous processing
-   
-   Returns a Ring response map or CompletableFuture."
-  [req origins sessions session-map endpoint sync?]
+  "Dispatches an HTTP request to the appropriate route after the origin check."
+  [req origins sessions session-map sync?]
   (try
-    (let [origin (get-in req [:headers "origin"])]
-      (log/debug "Handling HTTP request - method:" (:request-method req) "origin:" origin "sync:" sync?)
-      
-      (if (origins origin)
-        (if-let [session-id (or (get-in req [:headers "mcp-session-id"])
-                                (parse-param-session-id req))]
-          (if-let [session (get-session sessions session-id)]
-            (do
-              (log/trace "Found existing session:" session-id)
-              (case (:request-method req)
-                :get 
-                (do
-                  (log/trace "Handling GET request for SSE connection")
-                  (.close (:body req))
-                  {:status 200
-                   :body (sse/get-resp session sync? endpoint)
-                   :headers sse/streaming-headers})
-                
-                :delete 
-                (do
-                  (log/trace "Handling DELETE request - removing session:" session-id)
-                  (delete-session sessions session-id)
-                  {:status 200 :body "" :headers {}})
-                
-                :post 
-                (do
-                  (log/trace "Handling POST request for message processing")
-                  (papply (process req session)
-                          (fn [resp]
-                            (cond
-                              (empty? resp)
-                              (do
-                                (log/trace "Empty response, returning 202")
-                                {:status 202 :body nil :headers {"Content-Type" "application/json"}})
-                              
-                              endpoint
-                              (do
-                                (log/trace "Endpoint mode - returning JSON response")
-                                {:status 200
-                                 :body (rpc/json-serialize (::mcp/serde @session) resp)
-                                 :headers {"Content-Type" "application/json"}})
-                              
-                              :else
-                              (do
-                                (log/trace "SSE mode - returning streaming response")
-                                {:status 200
-                                 :body (sse/post-resp session (rpc/json-serialize (::mcp/serde @session) resp) sync?)
-                                 :headers sse/streaming-headers})))))
-                
-                (do
-                  (log/warn "Method not allowed:" (:request-method req))
-                  {:status 405 :body "Method Not Allowed" :headers {}})))
-            (do
-              (log/debug "Session not found:" session-id "- returning 404")
-              (json-resp 404 "Not Found" (::mcp/serde session-map))))
-          (do
-            (log/trace "No session ID provided - attempting initialization")
-            (handle-init req sessions session-map)))
-        {:status 403 :body "Forbidden" :headers {}}))
+    (let [origin (header req "origin")
+          method (:request-method req)]
+      (log/debug "HTTP request - method:" method "origin:" origin "sync?:" sync?)
+      (cond
+        (not (origins origin))
+        {:status 403 :body "Forbidden" :headers {}}
+
+        (= :post method)   (route-post req sessions session-map)
+        (= :get method)    (route-get req sessions session-map sync?)
+        (= :delete method) (route-delete req sessions session-map)
+
+        :else
+        {:status 405
+         :body "Method Not Allowed"
+         :headers {"Allow" "POST, GET, DELETE"}}))
     (catch Exception e
       (log/error e "Error handling HTTP request")
       (throw e))))
 
-(defn memory-sessions-store
-  "A Sessions implementation that stores sessions in a lookup map."
-  []
-  (->MemorySessionStore (ConcurrentHashMap.)))
+;; --- public API ------------------------------------------------------------
 
 (defn ring-handler
-  "Creates a Ring handler for MCP over HTTP with SSE streaming support.
+  "Creates a Ring handler implementing MCP 2025-06-18 Streamable HTTP transport.
 
-   Parameters:
-   - session-template: template session atom for creating new sessions
-   - sessions: a Sessions instance to store the sessions
-   - opts: options map containing:
-     - :allowed-origins: collection of allowed Origin headers (nil permits all)
-     - :client-req-timeout-ms: timeout for client requests (default: 120000)
-     - :endpoint: optional endpoint information for SSE connections
+  Parameters:
+  - session-template: an atom holding a session map used as a template for
+    each new session
+  - sessions: a Sessions instance for storing live sessions
+  - opts: option map
+    - :allowed-origins - collection of allowed Origin headers (nil permits all)
+    - :client-req-timeout-ms - client request timeout in ms (default 120000)
 
-   Returns a Ring handler function that supports both sync and async operation."
-  [session-template sessions {:keys [allowed-origins client-req-timeout-ms endpoint] :as opts}]
-  (log/debug "Creating Ring handler for MCP over HTTP")
-  (log/debug "Handler options:" opts)
-  (let [origins (if allowed-origins (set allowed-origins) (constantly true))]
+  Returns a Ring handler that supports both 1-arity (synchronous) and
+  3-arity (asynchronous) Ring operation."
+  [session-template sessions {:keys [allowed-origins client-req-timeout-ms]}]
+  (log/debug "Creating Ring handler for MCP Streamable HTTP")
+  (let [origins (if allowed-origins (set allowed-origins) (constantly true))
+        timeout (or client-req-timeout-ms 120000)
+        session-map-of #(assoc @session-template ::mcp/timeout-ms timeout)]
     (fn
       ([req]
-       (rpc/cleanup-requests (or client-req-timeout-ms 120000))
-       (let [resp (handle-common req origins sessions (assoc @session-template
-                                                        ::mcp/timeout-ms client-req-timeout-ms) endpoint true)]
+       (rpc/cleanup-requests timeout)
+       (let [resp (handle-common req origins sessions (session-map-of) true)]
          (if (instance? CompletableFuture resp) @resp resp)))
       ([req respond raise]
-       (rpc/cleanup-requests (or client-req-timeout-ms 120000))
-       (papply (handle-common req origins sessions (assoc @session-template
-                                                     ::mcp/timeout-ms client-req-timeout-ms) endpoint false)
-               respond)))))
+       (rpc/cleanup-requests timeout)
+       (try
+         (papply (handle-common req origins sessions (session-map-of) false) respond)
+         (catch Exception e (raise e)))))))

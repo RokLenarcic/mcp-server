@@ -1,5 +1,6 @@
 (ns example.rainfall
-  (:require [org.clojars.roklenarcic.mcp-server.json.charred :as json]
+  (:require [clj-http.client :as client]
+            [org.clojars.roklenarcic.mcp-server.json.charred :as json]
             [ring.adapter.jetty :refer [run-jetty]]
             [org.clojars.roklenarcic.mcp-server.server :as server]
             [org.clojars.roklenarcic.mcp-server.server.http :as http]))
@@ -31,13 +32,22 @@
                     ;; add a tool to that
                     (server/add-tool tool))]
     (run-jetty
-      (http/ring-handler session (http/memory-sessions-store) {:endpoint "http://localhost:5556/sse"})
-      {:port 5556 })))
+      (http/ring-handler session (http/memory-sessions-store) {})
+      {:port 5556})))
 
-(defn post-to-http-client [id method params]
-  (client/post "http://localhost:5556/sse?sessionId=sss"
-               {:content-type :json
-                :form-params {:jsonrpc "2.0" :id id :method method :params params}}))
+(defn post-to-http-client
+  "Send a JSON-RPC request to the running server. The first call should be an
+  `initialize` request without a session id; the response carries an
+  `Mcp-Session-Id` header that subsequent calls must include."
+  ([id method params]
+   (post-to-http-client id method params nil))
+  ([id method params session-id]
+   (client/post "http://localhost:5556/"
+                {:content-type :json
+                 :accept "application/json, text/event-stream"
+                 :headers (cond-> {"Origin" "http://localhost:5556"}
+                            session-id (assoc "Mcp-Session-Id" session-id))
+                 :form-params {:jsonrpc "2.0" :id id :method method :params params}})))
 
 (comment
 

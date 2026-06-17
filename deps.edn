@@ -25,7 +25,9 @@
                    ;; this allows nrepl to interrupt runaway repl evals
                    :jvm-opts ["-Djdk.attach.allowAttachSelf"]
                    :main-opts ["-m" "nrepl.cmdline" "--port" "7888"]}
-           :examples {:extra-deps {com.cnuernber/charred {:mvn/version "1.037"}}
+           :examples {:extra-deps {com.cnuernber/charred {:mvn/version "1.037"}
+                                   ring/ring {:mvn/version "1.14.2"}
+                                   clj-http/clj-http {:mvn/version "3.13.1"}}
                       :exec-fn example.runner/start
                       :exec-args {}
                       :extra-paths ["examples"]}}}
