@@ -337,6 +337,23 @@
       (is (nil? (rpc/handle-client-response session nil {:result {:success true} :id 9999})))
       (is (nil? (rpc/handle-client-response session nil {:error {:code -1 :message "oops"} :id 9999})))))
 
+  (testing "Response with missing :id is silently ignored"
+    (let [session (atom {::mcp/id "session-A"})]
+      (is (nil? (rpc/handle-client-response session nil {:result {:success true}})))
+      (is (nil? (rpc/handle-client-response session nil nil)))))
+
+  (testing "Unknown-id response does not disturb other pending entries on the same session"
+    (.clear @#'rpc/client-req-pending)
+    (let [session (atom {::mcp/id "session-A"})
+          fut (CompletableFuture.)
+          live-key (rpc/client-req-key session 1)]
+      (.put @#'rpc/client-req-pending live-key fut)
+      (is (nil? (rpc/handle-client-response session nil {:result {:success true} :id 99})))
+      (is (not (.isDone fut)))
+      (is (some? (.get @#'rpc/client-req-pending live-key)))
+      ;; Cleanup
+      (.remove @#'rpc/client-req-pending live-key)))
+
   (testing "Response for the originating session completes the pending future"
     (let [session (atom {::mcp/id "session-A"})
           fut (CompletableFuture.)

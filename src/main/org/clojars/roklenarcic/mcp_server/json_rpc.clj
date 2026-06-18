@@ -192,24 +192,33 @@
    - _req-meta: unused
    - params: response parameters containing :error, :result, and :id
 
-   The pending future is looked up by `[id session-key]`, so a response
-   delivered on a different session than the one that issued the request is
-   silently ignored (returns nil, which the HTTP transport maps to 202).
+   The pending future is looked up by `[id session-key]`. The following cases
+   are tolerated and ignored (returning nil, which the HTTP transport maps to
+   202 No Content):
+   - missing or non-numeric `:id` (malformed client response)
+   - `:id` that does not correspond to any pending server-initiated request
+   - `:id` that corresponds to a request issued on a different session
 
-   Returns nil (this is a notification handler)."
+   In each of those cases a debug-level message is logged so operators can
+   diagnose mis-routed or stale client responses without surfacing an error
+   to the misbehaving client.
+
+   Returns nil (this is a notification-shaped handler)."
   [context _ {:keys [error result id] :as params}]
-  (when-let [^CompletableFuture cb (and params id
-                                        (.remove client-req-pending
-                                                 (client-req-key context id)))]
-    (log/debug "Handling client response for id:" id "error:" (some? error))
-    (if-let [{:keys [code message data]} error]
+  (if
+    (or (nil? params) (nil? id))
+    (log/debug "Ignoring client response with missing id")
+    (if-let [^CompletableFuture cb (.remove client-req-pending (client-req-key context id))]
       (do
-        (log/debug "Client responded with error - code:" code "message:" message)
-        (.completeExceptionally cb (ex-info message (merge data {:code code :type :jsonrpc-client-error}))))
-      (do
-        (log/debug "Client responded with success result")
-        (.complete cb result)))
-    nil))
+        (log/debug "Handling client response for id:" id "error:" (some? error))
+        (if-let [{:keys [code message data]} error]
+          (do (log/debug "Client responded with error - code:" code "message:" message)
+              (.completeExceptionally cb (ex-info message (merge data {:code code :type :jsonrpc-client-error}))))
+          (do (log/debug "Client responded with success result")
+              (.complete cb result)))
+        nil)
+      (log/debug "Ignoring client response for unknown or wrong-session id:" id
+                 "(no pending request for this session)"))))
 
 (defn obj->jrpc-resp
   [context resp id]
