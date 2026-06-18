@@ -192,6 +192,18 @@ The `ring-handler` supports both synchronous and asynchronous Ring operation. Th
 Options:
 - `:allowed-origins` — collection of allowed Origin headers (`nil` permits all origins)
 - `:client-req-timeout-ms` — timeout for client requests in milliseconds (default: 120000)
+- `:sse-queue-capacity` — max number of server-to-client messages buffered per session while no SSE stream is attached (default: 1024). When the queue is full, `send-to-client` drops the oldest queued message to make room for the newest; on a failed write the in-flight batch is re-queued at the head and any over-capacity newest entries at the tail are dropped to keep older retried items.
+
+### Synchronous vs asynchronous Ring
+
+`ring-handler` returns a function that supports both Ring arities, but the GET SSE channel behaves differently depending on which one your adapter invokes:
+
+- **Synchronous (1-arity)**: the response body's `write-body-to-stream` runs to completion before the Ring adapter closes the underlying `OutputStream`. The implementation drains any queued messages onto the stream and then detaches it. Server-initiated requests/notifications produced *after* the GET returns are queued (bounded, see `:sse-queue-capacity`) and delivered on the *next* `GET /mcp`.
+- **Asynchronous (3-arity)**: the response body keeps the `OutputStream` registered on the session, so subsequent `send-notification` / `send-request` calls write to the live SSE stream immediately. The stream is detached on `DELETE /mcp` or on the first `IOException` (e.g. client disconnect), after which subsequent messages re-queue until the next `GET /mcp`.
+
+Use an async Ring adapter when you want live server-to-client streaming over a long-lived SSE connection. Use the sync adapter only if your deployment polls `GET /mcp` repeatedly or if you do not initiate server-side requests.
+
+Stage 1 of the Streamable HTTP transport keeps SSE strictly GET-owned: `POST` responses are always plain `application/json` (or `202 No Content` for notifications and client responses). `Last-Event-ID` based resumability is not yet supported — a new `GET /mcp` starts from the current queue head.
 
 ### Protocol headers
 
