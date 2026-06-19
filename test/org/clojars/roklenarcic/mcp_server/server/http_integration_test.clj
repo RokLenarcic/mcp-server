@@ -13,7 +13,7 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.resource.lookup :as lookup]
             [matcher-combinators.test])
-  (:import (java.util.concurrent TimeUnit)))
+  (:import (java.util.concurrent CompletableFuture CountDownLatch Executors TimeUnit)))
 
 (def test-port 8091)
 (def base-url (str "http://localhost:" test-port))
@@ -28,13 +28,15 @@
     (charred/serde {})
     {}))
 
-(defn start-test-server [session-template]
-  (let [sessions (http/memory-sessions-store)
-        handler (http/ring-handler session-template sessions
-                                   {:allowed-origins ["http://localhost:3000" "http://127.0.0.1:3000"]
-                                    :client-req-timeout-ms 30000})
-        server (jetty/run-jetty handler {:port test-port :join? false})]
-    {:server server :sessions sessions}))
+(defn start-test-server
+  ([session-template] (start-test-server session-template {}))
+  ([session-template {:keys [async?] :or {async? false}}]
+   (let [sessions (http/memory-sessions-store)
+         handler (http/ring-handler session-template sessions
+                                    {:allowed-origins ["http://localhost:3000" "http://127.0.0.1:3000"]
+                                     :client-req-timeout-ms 30000})
+         server (jetty/run-jetty handler {:port test-port :join? false :async? async?})]
+     {:server server :sessions sessions})))
 
 (defn stop-test-server [server-info]
   (.stop (:server server-info)))
@@ -141,9 +143,9 @@
                                      {:jsonrpc "2.0" :method "ping" :params {} :id 2}
                                      {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response)))
-          (is (= "application/json" (get-in response [:headers "content-type"])))
-          (is (match? {"jsonrpc" "2.0" "result" {} "id" 2}
-                      (json/read-json (:body response)))))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0" "result" {} "id" 2}]
+                      (parse-sse-body (:body response)))))
 
         (let [response (delete-request base-url {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response))))
@@ -178,7 +180,7 @@
           (stop-test-server server-info))))))
 
 (deftest http-tools-integration-test
-  (testing "Tool listing and invocation over HTTP return JSON bodies"
+  (testing "Tool listing and invocation over HTTP return SSE-wrapped JSON bodies"
     (let [session-template (create-test-session)
           calculator-tool (server/tool "calculator"
                                        "Simple calculator"
@@ -199,13 +201,13 @@
                                      {:jsonrpc "2.0" :method "tools/list" :params {} :id 2}
                                      {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response)))
-          (is (= "application/json" (get-in response [:headers "content-type"])))
-          (is (match? {"jsonrpc" "2.0"
-                       "result" {"tools" [{"name" "calculator"
-                                           "description" "Simple calculator"
-                                           "inputSchema" map?}]}
-                       "id" 2}
-                      (json/read-json (:body response)))))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0"
+                        "result" {"tools" [{"name" "calculator"
+                                            "description" "Simple calculator"
+                                            "inputSchema" map?}]}
+                        "id" 2}]
+                      (parse-sse-body (:body response)))))
 
         (let [response (post-request base-url
                                      {:jsonrpc "2.0"
@@ -215,16 +217,306 @@
                                       :id 3}
                                      {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response)))
-          (is (match? {"jsonrpc" "2.0"
-                       "result" {"content" [{"type" "text" "text" "8"}]
-                                 "isError" false}
-                       "id" 3}
-                      (json/read-json (:body response)))))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0"
+                        "result" {"content" [{"type" "text" "text" "8"}]
+                                  "isError" false}
+                        "id" 3}]
+                      (parse-sse-body (:body response)))))
         (finally
           (stop-test-server server-info))))))
 
+(deftest http-post-sse-piggyback-notification-test
+  (testing "A tool handler that sends a notification mid-dispatch piggybacks it on the POST-SSE response stream"
+    (let [session-template (create-test-session)
+          notify-tool (server/tool "notify-then-reply"
+                                   "Sends a notification and replies"
+                                   (server/obj-schema "params" {} [])
+                                   (fn [exchange _]
+                                     (rpc/send-notification
+                                       (c/get-session exchange)
+                                       "notifications/message"
+                                       {:level "info" :data "piggyback"})
+                                     "ok"))
+          _ (server/add-tool session-template notify-tool)
+          server-info (start-test-server session-template)
+          session-id (initialize-session)]
+      (try
+        (let [response (post-request base-url
+                                     {:jsonrpc "2.0"
+                                      :method "tools/call"
+                                      :params {:name "notify-then-reply"
+                                               :arguments {}}
+                                      :id 7}
+                                     {"Mcp-Session-Id" session-id})
+              events (parse-sse-events (:body response))
+              event-ids (mapv :event-id events)]
+          (is (= 200 (:status response)))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (= 2 (count events))
+              "Notification (piggybacked) and JSON-RPC response should arrive as two SSE events")
+          (is (= event-ids (sort event-ids))
+              "Event IDs must be strictly monotonic across notification + response")
+          (is (apply < event-ids)
+              "Event IDs must be strictly increasing")
+          (is (match? [{"jsonrpc" "2.0"
+                        "method" "notifications/message"
+                        "params" {"level" "info" "data" "piggyback"}}
+                       {"jsonrpc" "2.0"
+                        "result" {"content" [{"type" "text" "text" "ok"}]
+                                  "isError" false}
+                        "id" 7}]
+                      (mapv :data events))
+              "Notification must be delivered before the response on the POST-SSE stream"))
+        (finally
+          (stop-test-server server-info))))))
+
+(deftest http-post-sse-cross-request-isolation-test
+  (testing "Notifications produced by concurrently in-flight POST handlers
+route to the originating request's POST-SSE response stream, not to a
+sibling request's stream. A CountDownLatch forces the two handlers to
+overlap so both POST streams are simultaneously registered when each
+notification is sent."
+    (let [latch (CountDownLatch. 2)
+          session-template (create-test-session)
+          tag-tool (server/tool "tag-notify"
+                                "Sends a tagged notification then awaits the sibling before replying"
+                                (server/obj-schema "params"
+                                                   {:tag (server/str-schema "tag" nil)}
+                                                   ["tag"])
+                                (fn [exchange params]
+                                  (let [tag (:tag params)]
+                                    (rpc/send-notification
+                                      (c/get-session exchange)
+                                      "notifications/message"
+                                      {:level "info" :data tag})
+                                    (.countDown latch)
+                                    (.await latch 5 TimeUnit/SECONDS)
+                                    tag)))
+          _ (server/add-tool session-template tag-tool)
+          server-info (start-test-server session-template)
+          session-id (initialize-session)]
+      (try
+        (let [send-post (fn [tag req-id]
+                          (future
+                            (post-request base-url
+                                          {:jsonrpc "2.0"
+                                           :method "tools/call"
+                                           :params {:name "tag-notify"
+                                                    :arguments {:tag tag}}
+                                           :id req-id}
+                                          {"Mcp-Session-Id" session-id})))
+              f-a (send-post "A" 100)
+              f-b (send-post "B" 101)
+              r-a @f-a
+              r-b @f-b
+              events-a (parse-sse-events (:body r-a))
+              events-b (parse-sse-events (:body r-b))
+              event-text (fn [e]
+                           (or (get-in e [:data "params" "data"])
+                               (get-in e [:data "result" "content" 0 "text"])))]
+          (is (= 200 (:status r-a)))
+          (is (= 200 (:status r-b)))
+          (is (= "text/event-stream" (get-in r-a [:headers "content-type"])))
+          (is (= "text/event-stream" (get-in r-b [:headers "content-type"])))
+          (is (= 2 (count events-a))
+              "Request A's stream carries exactly its own notification + response")
+          (is (= 2 (count events-b))
+              "Request B's stream carries exactly its own notification + response")
+          (is (every? #(= "A" (event-text %)) events-a)
+              "Every event on request A's stream references tag A — no cross-talk from B")
+          (is (every? #(= "B" (event-text %)) events-b)
+              "Every event on request B's stream references tag B — no cross-talk from A")
+          (is (apply < (mapv :event-id events-a))
+              "Event IDs on stream A are strictly increasing")
+          (is (apply < (mapv :event-id events-b))
+              "Event IDs on stream B are strictly increasing")
+          (is (match? [{"jsonrpc" "2.0"
+                        "method" "notifications/message"
+                        "params" {"level" "info" "data" "A"}}
+                       {"jsonrpc" "2.0"
+                        "result" {"content" [{"type" "text" "text" "A"}]
+                                  "isError" false}
+                        "id" 100}]
+                      (mapv :data events-a))
+              "Stream A delivers notification before response, both tagged A")
+          (is (match? [{"jsonrpc" "2.0"
+                        "method" "notifications/message"
+                        "params" {"level" "info" "data" "B"}}
+                       {"jsonrpc" "2.0"
+                        "result" {"content" [{"type" "text" "text" "B"}]
+                                  "isError" false}
+                        "id" 101}]
+                      (mapv :data events-b))
+              "Stream B delivers notification before response, both tagged B"))
+        (finally
+          (stop-test-server server-info))))))
+
+(defn- read-until-double-crlf
+  "Reads bytes from `in` until the sequence \\r\\n\\r\\n (end-of-headers) is
+  found. Returns the header block (including the terminator) as a String.
+  Throws if the connection is closed before the terminator is found."
+  [^java.io.InputStream in]
+  (let [baos (java.io.ByteArrayOutputStream.)]
+    (loop [state 0]
+      ;; State machine: 0=idle 1=\\r 2=\\r\\n 3=\\r\\n\\r 4=done
+      (let [b (.read in)]
+        (when (neg? b)
+          (throw (ex-info "Connection closed before end of HTTP headers" {})))
+        (.write baos b)
+        (let [next (case state
+                     0 (if (= b 13) 1 0)
+                     1 (if (= b 10) 2 (if (= b 13) 1 0))
+                     2 (if (= b 13) 3 0)
+                     3 (if (= b 10) 4 (if (= b 13) 1 0))
+                     4 4)]
+          (if (= next 4)
+            (String. (.toByteArray baos) "UTF-8")
+            (recur next)))))))
+
+(deftest http-post-sse-flush-commits-headers-before-handler-test
+  (testing "Initial flush() in post-sse-resp commits 200+SSE headers to the client
+before any handler code runs. Verified with a raw socket: we can read the HTTP
+status line and headers while the handler is still blocked on a promise latch,
+proving that channelWrite(EMPTY_BUFFER, last=false) fires the TCP send synchronously
+before dispatch() is invoked."
+    (let [handler-started  (promise)
+          handler-finished (promise)
+          handler-unblock  (promise)
+          session-template (create-test-session)
+          _ (server/add-tool session-template
+                             (server/tool "slow-tool"
+                                         "blocks until released"
+                                         (server/obj-schema "params" {} [])
+                                         (fn [_ _]
+                                           (deliver handler-started true)
+                                           (deref handler-unblock 5000 nil)
+                                           (deliver handler-finished true)
+                                           "done")))
+          server-info (start-test-server session-template {:async? true})
+          session-id (initialize-session)]
+      (try
+        (with-open [sock (java.net.Socket. "localhost" test-port)]
+          (.setSoTimeout sock 5000)
+          (let [sock-in  (.getInputStream sock)
+                sock-out (.getOutputStream sock)
+                body-json (json/write-json-str
+                            {:jsonrpc "2.0" :id 42
+                             :method "tools/call"
+                             :params {:name "slow-tool" :arguments {}}})
+                body-bytes (.getBytes ^String body-json "UTF-8")
+                raw-req (str "POST / HTTP/1.1\r\n"
+                             "Host: localhost:" test-port "\r\n"
+                             "Origin: " origin "\r\n"
+                             "Mcp-Session-Id: " session-id "\r\n"
+                             "Content-Type: application/json\r\n"
+                             "Accept: " post-accept "\r\n"
+                             "Content-Length: " (count body-bytes) "\r\n"
+                             "Connection: close\r\n"
+                             "\r\n"
+                             body-json)]
+            (.write sock-out (.getBytes ^String raw-req "UTF-8"))
+            (.flush sock-out)
+            ;; Read exactly the header block (up to and including \r\n\r\n).
+            (let [header-block (read-until-double-crlf sock-in)
+                  lines (str/split-lines header-block)
+                  status-line (first lines)
+                  header-map (into {}
+                               (for [line (rest lines)
+                                     :when (str/includes? line ":")
+                                     :let [[k v] (str/split line #":\s+" 2)]]
+                                 [(str/lower-case (str/trim k)) (str/trim v)]))]
+              (is (str/starts-with? status-line "HTTP/1.1 200")
+                  "Server responded 200 before handler finished")
+              (is (str/starts-with? (get header-map "content-type" "") "text/event-stream")
+                  "text/event-stream header arrived before any body was written")
+              ;; Handler must have been dispatched (async) but MUST NOT have
+              ;; finished yet — it blocks on handler-unblock which we have not
+              ;; delivered. If handler-finished were already realized here, the
+              ;; test would be vacuously true (flush wouldn't matter).
+              (is (deref handler-started 2000 false)
+                  "Handler was dispatched within 2s")
+              (is (not (realized? handler-finished))
+                  "Handler is still blocking: headers arrived independently of the body write — flush() works"))
+            ;; Release the handler so the server can finish and the test can exit.
+            (deliver handler-unblock true)
+            (is (deref handler-finished 2000 false) "Handler completes after unblock")))
+        (finally
+          (stop-test-server server-info))))))
+
+(deftest http-post-sse-async-completable-future-test
+  (testing "POST request with a handler that returns a CompletableFuture is
+dispatched without blocking the Ring thread (async adapter): post-sse-resp
+attaches a .thenAccept callback that writes the response to the SSE
+stream once the future completes on a different thread. Also verifies
+that a notification sent synchronously by the handler before it returns
+the future still routes to the originating POST-SSE stream via the
+*post-stream* binding."
+    (let [executor (Executors/newSingleThreadExecutor)
+          completion-thread (atom nil)
+          dispatch-thread (atom nil)
+          session-template (create-test-session)
+          async-tool (server/tool "async-notify-then-reply"
+                                  "Sends a notification, then completes its response on a worker executor"
+                                  (server/obj-schema "params"
+                                                     {:msg (server/str-schema "msg" nil)}
+                                                     ["msg"])
+                                  (fn [exchange params]
+                                    (reset! dispatch-thread (.getName (Thread/currentThread)))
+                                    ;; Synchronous notification — must route to the
+                                    ;; POST-SSE stream via the *post-stream* binding
+                                    ;; established by post-sse-resp.
+                                    (rpc/send-notification
+                                      (c/get-session exchange)
+                                      "notifications/message"
+                                      {:level "info" :data (str "starting " (:msg params))})
+                                    ;; Return a CompletableFuture that completes
+                                    ;; on the worker executor — exercises the
+                                    ;; .thenAccept (non-blocking) branch in
+                                    ;; post-sse-resp.
+                                    (CompletableFuture/supplyAsync
+                                      (reify java.util.function.Supplier
+                                        (get [_]
+                                          (Thread/sleep 50)
+                                          (reset! completion-thread
+                                                  (.getName (Thread/currentThread)))
+                                          (:msg params)))
+                                      executor)))
+          _ (server/add-tool session-template async-tool)
+          server-info (start-test-server session-template {:async? true})
+          session-id (initialize-session)]
+      (try
+        (let [response (post-request base-url
+                                     {:jsonrpc "2.0"
+                                      :method "tools/call"
+                                      :params {:name "async-notify-then-reply"
+                                               :arguments {:msg "hello"}}
+                                      :id 200}
+                                     {"Mcp-Session-Id" session-id})
+              events (parse-sse-events (:body response))]
+          (is (= 200 (:status response)))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0"
+                        "method" "notifications/message"
+                        "params" {"level" "info" "data" "starting hello"}}
+                       {"jsonrpc" "2.0"
+                        "result" {"content" [{"type" "text" "text" "hello"}]
+                                  "isError" false}
+                        "id" 200}]
+                      (mapv :data events))
+              "Sync notification and async response both delivered on the POST-SSE stream in order")
+          (is (apply < (mapv :event-id events))
+              "Event IDs strictly increasing across notification + async response")
+          (is (some? @dispatch-thread) "Dispatch thread recorded")
+          (is (some? @completion-thread) "Completion thread recorded")
+          (is (not= @dispatch-thread @completion-thread)
+              "The CompletableFuture completed on the worker executor, not on the dispatch thread — proves the response write went through the .thenAccept callback rather than a blocking deref"))
+        (finally
+          (stop-test-server server-info)
+          (.shutdown executor))))))
+
 (deftest http-resources-integration-test
-  (testing "Resource listing and reading over HTTP return JSON bodies"
+  (testing "Resource listing and reading over HTTP return SSE-wrapped JSON bodies"
     (let [session-template (create-test-session)
           _ (server/set-resources-handler session-template (lookup/lookup-map true))
           _ (lookup/add-resource
@@ -238,13 +530,14 @@
                                      {:jsonrpc "2.0" :method "resources/list" :params {} :id 2}
                                      {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response)))
-          (is (match? {"jsonrpc" "2.0"
-                       "result" {"resources" [{"uri" "file:///test.txt"
-                                               "name" "Test File"
-                                               "description" "A test file"
-                                               "mimeType" "text/plain"}]}
-                       "id" 2}
-                      (json/read-json (:body response)))))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0"
+                        "result" {"resources" [{"uri" "file:///test.txt"
+                                                "name" "Test File"
+                                                "description" "A test file"
+                                                "mimeType" "text/plain"}]}
+                        "id" 2}]
+                      (parse-sse-body (:body response)))))
 
         (let [response (post-request base-url
                                      {:jsonrpc "2.0"
@@ -253,12 +546,13 @@
                                       :id 3}
                                      {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response)))
-          (is (match? {"jsonrpc" "2.0"
-                       "result" {"contents" [{"uri" "file:///test.txt"
-                                              "text" "Hello from file!"
-                                              "mimeType" "text/plain"}]}
-                       "id" 3}
-                      (json/read-json (:body response)))))
+          (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+          (is (match? [{"jsonrpc" "2.0"
+                        "result" {"contents" [{"uri" "file:///test.txt"
+                                               "text" "Hello from file!"
+                                               "mimeType" "text/plain"}]}
+                        "id" 3}]
+                      (parse-sse-body (:body response)))))
         (finally
           (stop-test-server server-info))))))
 
@@ -536,14 +830,17 @@
           server-info (start-test-server session-template)
           session-id (initialize-session)]
       (try
-        (testing "Matching version is accepted"
+        (testing "Matching version is accepted (response arrives as SSE)"
           (let [response (post-request base-url
                                        {:jsonrpc "2.0" :method "ping" :params {} :id 1}
                                        {"Mcp-Session-Id" session-id
                                         "MCP-Protocol-Version" init/server-protocol-version})]
-            (is (= 200 (:status response)))))
+            (is (= 200 (:status response)))
+            (is (= "text/event-stream" (get-in response [:headers "content-type"])))
+            (is (match? [{"jsonrpc" "2.0" "result" {} "id" 1}]
+                        (parse-sse-body (:body response))))))
 
-        (testing "Mismatched version is rejected with 400"
+        (testing "Mismatched version is rejected with 400 (plain JSON error response)"
           (let [response (post-request base-url
                                        {:jsonrpc "2.0" :method "ping" :params {} :id 2}
                                        {"Mcp-Session-Id" session-id
@@ -569,10 +866,10 @@
                                  {"Mcp-Session-Id" session2-id})]
             (is (= 200 (:status r1)))
             (is (= 200 (:status r2)))
-            (is (match? {"jsonrpc" "2.0" "result" {} "id" 2}
-                        (json/read-json (:body r1))))
-            (is (match? {"jsonrpc" "2.0" "result" {} "id" 3}
-                        (json/read-json (:body r2))))))
+            (is (match? [{"jsonrpc" "2.0" "result" {} "id" 2}]
+                        (parse-sse-body (:body r1))))
+            (is (match? [{"jsonrpc" "2.0" "result" {} "id" 3}]
+                        (parse-sse-body (:body r2))))))
         (finally
           (stop-test-server server-info))))))
 

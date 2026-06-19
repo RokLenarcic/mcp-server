@@ -28,13 +28,16 @@
 
 (defn- session-atom
   "Builds a fresh test session pre-populated with the keys sse functions
-  expect: queue, replay buffer, event-id counter, send-mutex, timeout-ms."
+  expect: queue, replay buffer, event-id counter, send-mutex, timeout-ms,
+  and an empty ::mcp/post-streams set (matching what `create-session`
+  installs in production sessions)."
   ([] (session-atom 16 16))
   ([q-capacity replay-capacity]
    (atom {::mcp/q (LinkedBlockingDeque. (int q-capacity))
           ::mcp/replay-buffer (LinkedBlockingDeque. (int replay-capacity))
           ::mcp/sse-next-event-id (AtomicLong. 0)
           ::mcp/send-mutex (Object.)
+          ::mcp/post-streams #{}
           ::mcp/timeout-ms 60000})))
 
 (defn- record [event-id msg] [event-id 0 msg])
@@ -313,3 +316,276 @@ one that threw) and events k+1..end are re-queued at the head."
       (is (zero? (.size q)))
       (is (zero? (.get counter))
           "Counter is not incremented when there is no message to send"))))
+
+;; --- post-stream registration ---------------------------------------------
+
+(deftest register-deregister-post-stream-roundtrip-test
+  (testing "register-post-stream adds os to ::mcp/post-streams; deregister removes it"
+    (let [session (session-atom)
+          os1 (ByteArrayOutputStream.)
+          os2 (ByteArrayOutputStream.)]
+      (is (empty? (::mcp/post-streams @session)))
+      (sse/register-post-stream session os1)
+      (is (= #{os1} (::mcp/post-streams @session)))
+      (sse/register-post-stream session os2)
+      (is (= #{os1 os2} (::mcp/post-streams @session)))
+      (sse/deregister-post-stream session os1)
+      (is (= #{os2} (::mcp/post-streams @session)))
+      (sse/deregister-post-stream session os2)
+      (is (empty? (::mcp/post-streams @session))))))
+
+(deftest deregister-post-stream-is-idempotent-test
+  (testing "Deregistering a stream that is not registered is a no-op"
+    (let [session (session-atom)
+          os (ByteArrayOutputStream.)]
+      (sse/deregister-post-stream session os)
+      (is (empty? (::mcp/post-streams @session))
+          "Disj on a missing entry must not throw"))))
+
+;; --- send-to-client-fn routing priority -----------------------------------
+
+(deftest send-to-client-fn-prefers-get-stream-over-post-stream-test
+  (testing "When both a GET-SSE stream and a POST-SSE stream are attached,
+the GET stream wins and the POST stream receives nothing."
+    (let [session (session-atom)
+          get-os (ByteArrayOutputStream.)
+          post-os (ByteArrayOutputStream.)
+          _ (swap! session assoc ::mcp/os get-os)
+          _ (sse/register-post-stream session post-os)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (is (= "id: 1\ndata: msg\n\n" (.toString get-os "UTF-8"))
+          "GET-SSE stream received the message")
+      (is (= "" (.toString post-os "UTF-8"))
+          "POST-SSE stream received nothing")
+      (is (= #{post-os} (::mcp/post-streams @session))
+          "POST stream remains registered"))))
+
+(deftest send-to-client-fn-falls-back-to-post-stream-when-no-get-test
+  (testing "With no GET-SSE stream attached, a registered POST-SSE stream
+receives the event ephemerally; the queue is not touched and the replay
+buffer is not appended (POST streams are not eligible for Last-Event-ID
+resumption)."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
+          post-os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session post-os)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (is (= "id: 1\ndata: msg\n\n" (.toString post-os "UTF-8")))
+      (is (zero? (.size q)) "Queue is not drained nor enqueued to")
+      (is (zero? (.size replay)) "Replay buffer is not appended for POST writes")
+      (is (= #{post-os} (::mcp/post-streams @session))
+          "Successful POST write does not deregister the stream"))))
+
+(deftest send-to-client-fn-post-stream-write-failure-queues-event-test
+  (testing "When the POST fallback write throws, the stream is deregistered
+and the event is queued for the next attached stream; the replay buffer is
+not touched."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
+          post-os (failing-os)
+          _ (sse/register-post-stream session post-os)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (is (empty? (::mcp/post-streams @session))
+          "Failed POST stream is deregistered")
+      (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
+          "Event is queued as fallback")
+      (is (zero? (.size replay)) "Replay buffer is not appended"))))
+
+(deftest send-to-client-fn-falls-back-to-queue-when-no-streams-test
+  (testing "With neither GET-SSE nor POST-SSE streams attached, the message is queued"
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))))))
+
+;; --- send-to-client-fn binding-based routing ------------------------------
+
+(deftest send-to-client-fn-bound-post-stream-wins-over-get-test
+  (testing "When `*post-stream*` is bound to a registered POST stream, it
+wins over the active GET-SSE stream (so handler-produced notifications
+correlate with the originating request's response)."
+    (let [session (session-atom)
+          get-os (ByteArrayOutputStream.)
+          bound-os (ByteArrayOutputStream.)
+          _ (swap! session assoc ::mcp/os get-os)
+          _ (sse/register-post-stream session bound-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (= "id: 1\ndata: msg\n\n" (.toString bound-os "UTF-8"))
+          "Bound POST stream received the message")
+      (is (= "" (.toString get-os "UTF-8"))
+          "GET-SSE stream received nothing")
+      (is (= #{bound-os} (::mcp/post-streams @session))
+          "Successful bound write does not deregister the stream"))))
+
+(deftest send-to-client-fn-bound-post-stream-routes-without-get-test
+  (testing "With no GET stream attached, a bound POST stream still wins
+over a sibling POST stream registered for a different in-flight request."
+    (let [session (session-atom)
+          bound-os (ByteArrayOutputStream.)
+          sibling-os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session bound-os)
+          _ (sse/register-post-stream session sibling-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (= "id: 1\ndata: msg\n\n" (.toString bound-os "UTF-8"))
+          "Bound POST stream received the message")
+      (is (= "" (.toString sibling-os "UTF-8"))
+          "Sibling POST stream received nothing")
+      (is (= #{bound-os sibling-os} (::mcp/post-streams @session))
+          "Neither stream was deregistered"))))
+
+(deftest send-to-client-fn-bound-write-failure-falls-through-to-get-test
+  (testing "When the bound POST stream's write fails, it self-deregisters
+and routing falls through to the active GET-SSE stream."
+    (let [session (session-atom)
+          get-os (ByteArrayOutputStream.)
+          bound-os (failing-os)
+          _ (swap! session assoc ::mcp/os get-os)
+          _ (sse/register-post-stream session bound-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (empty? (::mcp/post-streams @session))
+          "Failed bound stream is deregistered")
+      (is (= "id: 1\ndata: msg\n\n" (.toString get-os "UTF-8"))
+          "GET stream took over delivery"))))
+
+(deftest send-to-client-fn-bound-write-failure-falls-through-to-fallback-test
+  (testing "When the bound POST stream fails and no GET is attached,
+routing iterates the other registered POST streams (excluding the
+already-attempted bound stream)."
+    (let [session (session-atom)
+          bound-os (failing-os)
+          sibling-os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session bound-os)
+          _ (sse/register-post-stream session sibling-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (= #{sibling-os} (::mcp/post-streams @session))
+          "Failed bound stream is deregistered; sibling remains")
+      (is (= "id: 1\ndata: msg\n\n" (.toString sibling-os "UTF-8"))
+          "Sibling POST stream took over delivery"))))
+
+(deftest send-to-client-fn-bound-and-all-fallbacks-fail-queues-test
+  (testing "When the bound POST stream and every fallback POST stream
+fail, the message is queued for the next attached stream."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          bound-os (failing-os)
+          sibling-os (failing-os)
+          _ (sse/register-post-stream session bound-os)
+          _ (sse/register-post-stream session sibling-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (empty? (::mcp/post-streams @session))
+          "Both failed POST streams are deregistered")
+      (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
+          "Event queued as last-resort fallback"))))
+
+(deftest send-to-client-fn-iterates-multiple-post-streams-test
+  (testing "Without a binding and no GET stream, routing iterates the
+registered POST streams via `some` and short-circuits on the first
+healthy delivery: exactly one of the streams receives the event."
+    (let [session (session-atom)
+          os1 (ByteArrayOutputStream.)
+          os2 (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session os1)
+          _ (sse/register-post-stream session os2)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (let [s1 (.toString os1 "UTF-8")
+            s2 (.toString os2 "UTF-8")]
+        (is (or (and (= "id: 1\ndata: msg\n\n" s1) (= "" s2))
+                (and (= "id: 1\ndata: msg\n\n" s2) (= "" s1)))
+            "Exactly one POST stream receives the message; `some` short-circuits"))
+      (is (= #{os1 os2} (::mcp/post-streams @session))
+          "Neither stream is deregistered (both writes succeeded or were skipped)"))))
+
+(deftest send-to-client-fn-iterates-all-failing-post-streams-and-queues-test
+  (testing "Without a binding, when no GET is attached and every POST
+stream's write fails, all of them self-deregister and the event is
+queued."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          os1 (failing-os)
+          os2 (failing-os)
+          _ (sse/register-post-stream session os1)
+          _ (sse/register-post-stream session os2)
+          send! (sse/send-to-client-fn session)]
+      (send! "msg")
+      (is (empty? (::mcp/post-streams @session))
+          "Both POST streams are deregistered")
+      (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
+          "Event queued as last-resort fallback"))))
+
+(deftest send-to-client-fn-bound-without-get-or-others-test
+  (testing "When `*post-stream*` is bound and is the only registered
+stream, routing delivers directly to it (no queueing, no replay)."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
+          bound-os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session bound-os)
+          send! (sse/send-to-client-fn session)]
+      (binding [sse/*post-stream* bound-os]
+        (send! "msg"))
+      (is (= "id: 1\ndata: msg\n\n" (.toString bound-os "UTF-8")))
+      (is (zero? (.size q)) "Queue is not drained nor enqueued to")
+      (is (zero? (.size replay)) "Replay buffer is not appended for POST writes")
+      (is (= #{bound-os} (::mcp/post-streams @session))
+          "Successful bound write does not deregister"))))
+
+;; --- write-post-response-and-deregister -----------------------------------
+
+(deftest write-post-response-and-deregister-writes-and-removes-test
+  (testing "Writes the response as a single SSE event and removes os from post-streams"
+    (let [session (session-atom)
+          os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session os)]
+      (sse/write-post-response-and-deregister session os "{\"jsonrpc\":\"2.0\"}")
+      (is (= "id: 1\ndata: {\"jsonrpc\":\"2.0\"}\n\n" (.toString os "UTF-8")))
+      (is (empty? (::mcp/post-streams @session))))))
+
+(deftest write-post-response-and-deregister-skips-replay-buffer-test
+  (testing "POST response event is NOT appended to the replay buffer"
+    (let [session (session-atom)
+          replay (::mcp/replay-buffer @session)
+          os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session os)]
+      (sse/write-post-response-and-deregister session os "{\"r\":1}")
+      (is (zero? (.size replay))
+          "POST stream events are ephemeral; no replay capability"))))
+
+(deftest write-post-response-and-deregister-nil-msg-only-deregisters-test
+  (testing "When msg is nil, nothing is written and no event id is allocated;
+the stream is still deregistered."
+    (let [session (session-atom)
+          ^AtomicLong counter (::mcp/sse-next-event-id @session)
+          os (ByteArrayOutputStream.)
+          _ (sse/register-post-stream session os)]
+      (sse/write-post-response-and-deregister session os nil)
+      (is (= "" (.toString os "UTF-8")) "No bytes written")
+      (is (zero? (.get counter)) "Event id counter is not incremented")
+      (is (empty? (::mcp/post-streams @session))
+          "Stream is still deregistered"))))
+
+(deftest write-post-response-and-deregister-swallows-ioexception-test
+  (testing "IOException on the write is logged and swallowed so the
+streaming body returns normally; the stream is still deregistered."
+    (let [session (session-atom)
+          os (failing-os)
+          _ (sse/register-post-stream session os)]
+      (sse/write-post-response-and-deregister session os "{\"r\":1}")
+      (is (empty? (::mcp/post-streams @session))
+          "Stream deregistered even when write fails"))))

@@ -17,8 +17,10 @@
             [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
             [org.clojars.roklenarcic.mcp-server.json-rpc.parse :as parse]
             [org.clojars.roklenarcic.mcp-server.server.sse :as sse]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
-  (:import (java.security SecureRandom)
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply]]
+            [ring.core.protocols :as ring])
+  (:import (java.io OutputStream)
+           (java.security SecureRandom)
            (java.util Base64)
            (java.util.concurrent CompletableFuture ConcurrentHashMap LinkedBlockingDeque)
            (java.util.concurrent.atomic AtomicLong)))
@@ -144,6 +146,7 @@
            ::mcp/sse-next-event-id (AtomicLong. 0)
            ::mcp/q (LinkedBlockingDeque. (int capacity))
            ::mcp/replay-buffer (LinkedBlockingDeque. (int replay-cap))
+           ::mcp/post-streams #{}
            ::mcp/send-to-client send-to-client)
     (add-watch session ::watcher handler/change-watcher)
     session))
@@ -174,6 +177,80 @@
     ;; Regular request response -> 200 + JSON body.
     :else
     (json-resp 200 resp serde)))
+
+(defn- post-sse-resp
+  "Streamable response body for a POST whose parsed item is a JSON-RPC
+  request.
+
+  Per MCP 2025-06-18 Streamable HTTP, the server MAY (and this transport
+  does) return an SSE stream as the POST response so that server-initiated
+  messages produced during dispatch can piggyback on the same connection.
+  Concretely, the body:
+
+  1. Flushes the response so the client sees `200 + text/event-stream`
+     headers before any handler work begins.
+  2. Registers the response OutputStream as a request-scoped POST-SSE
+     stream (::mcp/post-streams) and binds it to `sse/*post-stream*` for
+     the duration of the dispatch so that server-initiated messages
+     produced by synchronous handler code (and any code reachable through
+     it) route deterministically to this exact stream first, preserving
+     the spec's preference for related server messages on the originating
+     POST response. See the routing priority in `sse/send-to-client-fn`.
+  3. Invokes the supplied `dispatch` thunk (a zero-arg closure over
+     `rpc/handle-parsed`). Three outcomes:
+     - Non-future result: write + deregister + close inline.
+     - CompletableFuture in sync Ring mode: block on `@result`, write
+       + deregister + close, then return. The sync adapter would close
+       the underlying HttpOutput on return anyway; HttpOutput.close is
+       idempotent so the explicit close here is harmless.
+     - CompletableFuture in async Ring mode: attach a `.thenApply`
+       callback that writes + deregisters + closes the OutputStream,
+       and return immediately. The Ring async adapter wraps the
+       response OutputStream so that `.close()` triggers
+       `AsyncContext.complete()` — without that close the response
+       never finishes from the client's perspective and the connection
+       hangs. The Ring thread is freed while the handler completes
+       elsewhere.
+     Asynchronous handlers that produce notifications from background
+     threads must propagate the `*post-stream*` binding themselves via
+     `bound-fn` (see the `sse/*post-stream*` docstring) — the dynamic
+     binding established here only spans the synchronous portion of
+     `(dispatch)`.
+  4. Writes the JSON-RPC response (or nothing, when the dispatcher
+     produced no response — e.g. a cancelled request) as a single SSE
+     event and atomically deregisters the stream under
+     ::mcp/send-mutex via `sse/write-post-response-and-deregister`, so
+     no unrelated fallback message can splice in between the response
+     and EOF.
+  5. Closes the response OutputStream from the same `complete` callback
+     (or from the synchronous-dispatch-failure catch) so the HTTP
+     response actually finishes — in async mode that close is what
+     completes the underlying `AsyncContext`."
+  [session dispatch serde sync?]
+  (reify ring/StreamableResponseBody
+    (write-body-to-stream [_ _ os]
+      (.flush ^OutputStream os)
+      (sse/register-post-stream session os)
+      (let [close-stream (fn []
+                           (try (.close ^OutputStream os)
+                                (catch Throwable e
+                                  (log/debug e "POST-SSE OS close failed"))))]
+        (try
+          (let [complete (fn [resp]
+                           (try
+                             (sse/write-post-response-and-deregister
+                               session os (when resp (rpc/json-serialize serde resp)))
+                             (catch Throwable e
+                               (log/error e "POST-SSE write failed")
+                               (sse/deregister-post-stream session os))
+                             (finally
+                               (close-stream))))
+                result (papply (binding [sse/*post-stream* os] (dispatch)) complete)]
+            (cond-> result (and sync? (instance? CompletableFuture result)) deref))
+          (catch Throwable e
+            (log/error e "POST-SSE dispatch failed")
+            (sse/deregister-post-stream session os)
+            (close-stream)))))))
 
 (defn- handle-init-post
   "Handles a POST that arrived without an Mcp-Session-Id header; the only
@@ -209,12 +286,33 @@
                   "Mcp-Session-Id header required" (:id parsed) serde))))
 
 (defn- handle-session-post
-  "Handles a POST routed to an existing session: parse, dispatch, respond."
-  [req session]
+  "Handles a POST routed to an existing session: parse, dispatch, respond.
+
+  Request items return an SSE-streamed response (handled inside
+  `post-sse-resp` so that mid-dispatch server-initiated messages can
+  piggyback on the same connection per MCP 2025-06-18). Notifications
+  and client responses still return 202 with an empty body; parse and
+  invalid-request errors still return 400 with a JSON error body.
+
+  Both branches invoke the same `dispatch` thunk (a closure over
+  `rpc/handle-parsed`); the SSE branch defers it until after the stream
+  is registered and `sse/*post-stream*` is bound, while the non-SSE
+  branch invokes it immediately and shapes the result via
+  `post-response`.
+
+  `sync?` flows through to `post-sse-resp` so it can decide whether to
+  block on a CompletableFuture result (sync adapter, which closes the
+  OutputStream on return) or attach a callback and return immediately
+  (async adapter, which keeps the OutputStream alive)."
+  [req session sync?]
   (let [{::mcp/keys [dispatch-table serde]} @session
-        parsed (parse-body req serde)]
-    (papply (rpc/handle-parsed parsed dispatch-table session req)
-            post-response (:item-type parsed) serde)))
+        parsed (parse-body req serde)
+        dispatch #(rpc/handle-parsed parsed dispatch-table session req)]
+    (if (= :request (:item-type parsed))
+      {:status 200
+       :headers sse/streaming-headers
+       :body (post-sse-resp session dispatch serde sync?)}
+      (papply (dispatch) post-response (:item-type parsed) serde))))
 
 (defn- parse-event-id
   "Parses a `Last-Event-ID` header value into a Long; returns nil if blank,
@@ -264,13 +362,13 @@
                 serde)))
 
 (defn- route-post
-  [req sessions session-map]
+  [req sessions session-map sync?]
   (let [serde (::mcp/serde session-map)]
     (or (post-headers-error req serde)
         (if-let [session-id (header req "mcp-session-id")]
           (if-let [session (get-session sessions session-id)]
             (if (protocol-version-ok? req)
-              (handle-session-post req session)
+              (handle-session-post req session sync?)
               (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
                           (str "Unsupported MCP-Protocol-Version: "
                                (header req "mcp-protocol-version"))
@@ -323,7 +421,7 @@
         (not (origins origin))
         {:status 403 :body "Forbidden" :headers {}}
 
-        (= :post method)   (route-post req sessions session-map)
+        (= :post method)   (route-post req sessions session-map sync?)
         (= :get method)    (route-get req sessions session-map sync?)
         (= :delete method) (route-delete req sessions session-map)
 
