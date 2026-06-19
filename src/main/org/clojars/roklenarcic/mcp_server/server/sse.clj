@@ -5,8 +5,9 @@
   Each session has at most one active SSE stream (registered as ::mcp/os),
   a bounded outbound queue (::mcp/q) of messages produced while no stream
   was attached, and a bounded replay buffer (::mcp/replay-buffer) of events
-  that have been written successfully and are eligible for replay on
-  reconnect.
+  whose write was either confirmed successful or attempted-but-unconfirmed
+  (the stream's OutputStream threw mid-batch or on flush). Both groups are
+  eligible for replay on reconnect via `Last-Event-ID`.
 
   Every server-to-client SSE message is assigned a monotonic event id from
   ::mcp/sse-next-event-id (an AtomicLong) and emitted as
@@ -19,6 +20,15 @@
   last-event-id) are written out before the pending queue is drained, so
   the client can resume after a transport-level disconnect.
 
+  Delivery semantics on write failure:
+  - Events that we never attempted to write (never reached the OutputStream
+    inside the failing batch) are re-queued at the head of the outbound
+    queue for the next attached stream: at-least-once.
+  - Events whose write was attempted but the stream failed during or after
+    them (so we cannot tell whether the client received them) are appended
+    to the replay buffer only: at-most-once, unless the client reconnects
+    with `Last-Event-ID` and the events are still buffered.
+
   Concurrency:
   - Event id assignment and the choice between live-write and queueing are
     performed under ::mcp/send-mutex so concurrent producers cannot
@@ -29,15 +39,15 @@
   Buffer eviction:
   - Enqueueing a new message at the tail drops the oldest entry (head)
     when the queue is full, favoring recency.
-  - Re-queueing failed-write messages at the head drops the newest entry
-    (tail) when the queue is full, preserving older retried items.
+  - Re-queueing not-yet-attempted messages at the head drops the newest
+    entry (tail) when the queue is full, preserving older retried items.
   - The replay buffer drops the oldest entry when full so the most recent
-    successful sends remain available for resumption."
-  (:require [clojure.java.io :as io]
-            [clojure.tools.logging :as log]
+    sends remain available for resumption."
+  (:require [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [ring.core.protocols :as ring])
-  (:import (java.io IOException OutputStream Writer)
+  (:import (java.io IOException OutputStream)
+           (java.nio.charset StandardCharsets)
            (java.util ArrayList)
            (java.util.concurrent LinkedBlockingDeque)
            (java.util.concurrent.atomic AtomicLong)))
@@ -83,13 +93,16 @@
   (swap! session update ::mcp/os #(if (= os %) nil %)))
 
 (defn- write-event
-  "Writes a single SSE frame to `w` with both `id:` and `data:` fields."
-  [^Writer w [event-id _ msg]]
-  (.write w "id: ")
-  (.write w (str event-id))
-  (.write w "\ndata: ")
-  (.write w (str msg))
-  (.write w "\n\n"))
+  "Writes a single SSE frame to `os` as UTF-8 bytes in a single
+  `OutputStream.write(byte[])` call.
+
+  Writing bytes directly (rather than through a buffered Writer) means
+  every event hits the OutputStream on its own write call, so a mid-batch
+  IOException surfaces immediately and the partition between attempted
+  and not-yet-attempted events in `write-responses` is exact."
+  [^OutputStream os [event-id _ msg]]
+  (.write os (.getBytes (str "id: " event-id "\ndata: " msg "\n\n")
+                        StandardCharsets/UTF_8)))
 
 (defn write-responses
   "Drains `q`, appends `record` when supplied, and writes the resulting
@@ -102,37 +115,56 @@
   order, so the events become available to a future reconnect that
   presents `Last-Event-ID`.
 
-  On IOException (from any write or the final flush) the stream is
-  detached via `close-os` and every batched message is pushed back onto
-  the head of the queue in original order, so the next attached stream
-  can deliver them. Re-delivery is at-least-once; the in-flight
-  client-request layer is keyed by id and is idempotent under duplicates.
+  On IOException the stream is detached via `close-os` and the batch is
+  partitioned into:
+  - attempted events (those whose `write-event` call was begun, including
+    the one that threw, plus everything earlier in the batch) — appended
+    to the replay buffer only. We cannot tell whether the underlying
+    transport delivered them, so we treat them as at-most-once and rely on
+    a client reconnect with `Last-Event-ID` to recover any lost ones.
+  - not-yet-attempted events (those past the failure point) — pushed back
+    onto the head of the queue in original order for the next attached
+    stream. The in-flight client-request layer is keyed by id and is
+    idempotent under duplicates, so at-least-once redelivery is safe.
 
   When the queue cannot fit a re-queued entry (bounded capacity), the
   newest entry at the tail is dropped to keep room for the older retried
   item."
   [session ^OutputStream os ^LinkedBlockingDeque q record]
-  (let [w (io/writer os)
-        batch (ArrayList.)
-        ^LinkedBlockingDeque replay (::mcp/replay-buffer @session)]
+  (let [batch (ArrayList.)
+        ^LinkedBlockingDeque replay (::mcp/replay-buffer @session)
+        attempted (volatile! 0)]
     (.drainTo q batch)
     (when record
       (.add batch record))
     (log/debug "SSE write - batch size:" (.size batch))
     (locking os
       (try
-        (run! #(write-event w %) batch)
-        (.flush w)
+        (run! (fn [evt]
+                (vswap! attempted inc)
+                (write-event os evt))
+              batch)
+        (.flush os)
         ;; Success: append to the replay buffer so the events can be
         ;; resent on a reconnect that supplies Last-Event-ID.
         (when replay
           (run! #(offer-last-drop-oldest replay %) batch))
         (catch IOException e
-          (log/debug e "SSE stream write or flush failed; closing and re-queuing")
+          (log/debug e "SSE stream write or flush failed; closing")
           (close-os session os)
-          ;; Re-queue at the head in reverse order so the original order is
-          ;; restored at the front of the deque.
-          (run! #(offer-first-drop-newest q %) (reverse batch)))))
+          (let [n @attempted
+                size (.size batch)
+                ambiguous (.subList batch 0 n)
+                unsent (.subList batch n size)]
+            ;; Attempted events go to the replay buffer only. We don't
+            ;; know whether the transport delivered them; reconnect via
+            ;; Last-Event-ID is the recovery path.
+            (when replay
+              (run! #(offer-last-drop-oldest replay %) ambiguous))
+            ;; Not-yet-attempted events go back to the head of the queue
+            ;; in original order so the next attached stream delivers
+            ;; them first.
+            (run! #(offer-first-drop-newest q %) (reverse unsent))))))
     nil))
 
 (defn replay-events
@@ -144,15 +176,14 @@
   [session ^OutputStream os last-event-id]
   (let [^LinkedBlockingDeque replay (::mcp/replay-buffer @session)]
     (when (and replay last-event-id)
-      (let [w (io/writer os)
-            events (->> (iterator-seq (.iterator replay))
+      (let [events (->> (iterator-seq (.iterator replay))
                         (filter (fn [[eid _ _]] (> eid last-event-id))))]
         (when (seq events)
           (log/debug "SSE replay - replaying events:" (count events))
           (locking os
             (try
-              (run! #(write-event w %) events)
-              (.flush w)
+              (run! #(write-event os %) events)
+              (.flush os)
               (catch IOException e
                 (log/debug e "SSE replay write or flush failed; closing")
                 (close-os session os)))))))

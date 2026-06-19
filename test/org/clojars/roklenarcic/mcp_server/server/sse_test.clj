@@ -97,8 +97,10 @@
       (is (= [2 3] (mapv first (queue-vec replay)))
           "Oldest replay entry (id=1) dropped when capacity reached"))))
 
-(deftest write-responses-detaches-and-requeues-on-write-failure-test
-  (testing "When the underlying stream's write fails, batch is re-queued at head and stream is detached; replay buffer is untouched"
+(deftest write-responses-detaches-and-partitions-on-write-failure-test
+  (testing "When the OutputStream throws on the first write, the failing
+event is treated as attempted (goes to the replay buffer) and the rest of
+the batch is re-queued at the head."
     (let [session (session-atom)
           q (::mcp/q @session)
           replay (::mcp/replay-buffer @session)
@@ -107,13 +109,15 @@
       (swap! session assoc ::mcp/os os)
       (sse/write-responses session os q (record 2 "new-msg"))
       (is (nil? (::mcp/os @session)) "Stream is detached after IOException")
-      (is (zero? (.size replay)) "Replay buffer is untouched on failure")
-      (is (= 2 (.size q)) "Both drained queued entry and the new record are re-queued")
-      (is (= "queued-msg" (third (.pollFirst q))))
-      (is (= "new-msg" (third (.pollFirst q)))))))
+      (is (= [[1 "queued-msg"]] (mapv (juxt first third) (queue-vec replay)))
+          "The drained event whose write was attempted (and failed) is in the replay buffer")
+      (is (= [[2 "new-msg"]] (mapv (juxt first third) (queue-vec q)))
+          "The not-yet-attempted record is re-queued at the head"))))
 
-(deftest write-responses-detaches-and-requeues-on-flush-failure-test
-  (testing "When only flush fails, drained queued and new records are re-queued at the head and the stream is detached"
+(deftest write-responses-detaches-and-puts-all-in-replay-on-flush-failure-test
+  (testing "When all writes succeed but flush throws, every event is
+attempted-but-unconfirmed and goes to the replay buffer; nothing is
+re-queued."
     (let [session (session-atom)
           q (::mcp/q @session)
           replay (::mcp/replay-buffer @session)
@@ -122,24 +126,26 @@
       (swap! session assoc ::mcp/os os)
       (sse/write-responses session os q (record 2 "new-msg"))
       (is (nil? (::mcp/os @session)) "Stream is detached on flush failure")
-      (is (zero? (.size replay)) "Replay buffer is untouched on failure")
-      (is (= 2 (.size q)))
-      (is (= "queued-msg" (third (.pollFirst q))))
-      (is (= "new-msg" (third (.pollFirst q)))))))
+      (is (zero? (.size q)) "Nothing is re-queued; all events were attempted")
+      (is (= [[1 "queued-msg"] [2 "new-msg"]]
+             (mapv (juxt first third) (queue-vec replay)))
+          "All events are appended to the replay buffer in order"))))
 
 (deftest write-responses-no-msg-failure-test
-  (testing "Drain-only failure (no new record) re-queues the drained entries in order and detaches"
+  (testing "Drain-only failure (no new record): the failing event lands in
+the replay buffer and the remainder is re-queued at the head."
     (let [session (session-atom)
           q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
           os (failing-os)]
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
       (swap! session assoc ::mcp/os os)
       (sse/write-responses session os q nil)
       (is (nil? (::mcp/os @session)))
-      (is (= 2 (.size q)))
-      (is (= "a" (third (.pollFirst q))))
-      (is (= "b" (third (.pollFirst q)))))))
+      (is (= [[1 "a"]] (mapv (juxt first third) (queue-vec replay))))
+      (is (= [[2 "b"]] (mapv (juxt first third) (queue-vec q)))
+          "Only the not-yet-attempted entry is re-queued"))))
 
 (defn- write-injecting-failing-os
   "An OutputStream whose write injects `tail-record` into `q` and then throws.
@@ -153,17 +159,60 @@
     (flush [] (throw (IOException. "broken pipe")))))
 
 (deftest write-responses-requeue-preserves-order-with-tail-items-test
-  (testing "Re-queued (originally drained) items land at the head, ahead of items enqueued concurrently after the drain"
+  (testing "The not-yet-attempted re-queued items land at the head, ahead
+of any item enqueued concurrently after the drain. The attempted-and-failed
+event ends up in the replay buffer."
     (let [session (session-atom)
           q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
           os (write-injecting-failing-os q (record 99 "tail"))]
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
       (swap! session assoc ::mcp/os os)
       (sse/write-responses session os q nil)
       (is (nil? (::mcp/os @session)))
-      (is (= ["a" "b" "tail"] (mapv third (queue-vec q)))
-          "Originals 'a' 'b' restored at head; concurrently-enqueued 'tail' stays at tail"))))
+      (is (= [[1 "a"]] (mapv (juxt first third) (queue-vec replay)))
+          "The first event was attempted and failed; it goes to the replay buffer")
+      (is (= [[2 "b"] [99 "tail"]] (mapv (juxt first third) (queue-vec q)))
+          "Not-yet-attempted 'b' restored at head; concurrently-enqueued 'tail' stays at the tail"))))
+
+(defn- write-after-n-failing-os
+  "An OutputStream whose first `n` writes succeed and whose (n+1)-th write
+  throws. Flush always succeeds (but won't be reached after a failed write).
+  Lets a test exercise a mid-batch failure where `attempted` lands strictly
+  between 0 and batch size."
+  [n]
+  (let [remaining (atom n)]
+    (proxy [OutputStream] []
+      (write
+        ([_]     (if (pos? @remaining)
+                   (do (swap! remaining dec) nil)
+                   (throw (IOException. "broken pipe"))))
+        ([_ _ _] (if (pos? @remaining)
+                   (do (swap! remaining dec) nil)
+                   (throw (IOException. "broken pipe")))))
+      (flush [] nil))))
+
+(deftest write-responses-partitions-mid-batch-failure-test
+  (testing "When the OutputStream accepts the first k writes and then throws,
+events 0..k go to the replay buffer (attempted-and-ambiguous, including the
+one that threw) and events k+1..end are re-queued at the head."
+    (let [session (session-atom)
+          q (::mcp/q @session)
+          replay (::mcp/replay-buffer @session)
+          os (write-after-n-failing-os 2)] ;; events 1 and 2 succeed, event 3 throws
+      (.offer q (record 1 "a"))
+      (.offer q (record 2 "b"))
+      (.offer q (record 3 "c"))
+      (.offer q (record 4 "d"))
+      (swap! session assoc ::mcp/os os)
+      (sse/write-responses session os q nil)
+      (is (nil? (::mcp/os @session)))
+      (is (= [[1 "a"] [2 "b"] [3 "c"]]
+             (mapv (juxt first third) (queue-vec replay)))
+          "Successful writes plus the throwing write all land in the replay buffer")
+      (is (= [[4 "d"]] (mapv (juxt first third) (queue-vec q)))
+          "Only the not-yet-attempted event 'd' is re-queued"))))
 
 ;; --- replay-events ---------------------------------------------------------
 

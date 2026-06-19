@@ -306,6 +306,9 @@
     (when (and initialized? (not= (:prompts old-handlers) (:prompts new-handlers)))
       (log/debug "Prompts changed, notifying client")
       (rpc/send-notification rpc-session "notifications/prompts/list_changed" nil))
+    (when (and initialized? (not= (:resource-templates old-handlers) (:resource-templates new-handlers)))
+      (log/debug "Resource templates changed, notifying client")
+      (rpc/send-notification rpc-session "notifications/resources/list_changed" nil))
     (when (and (::mcp/os o) (not (identical? (::mcp/os o) (::mcp/os n))))
       (log/debug "Output stream changed, closing old stream")
       (try
