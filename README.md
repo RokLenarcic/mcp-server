@@ -192,18 +192,17 @@ The `ring-handler` supports both synchronous and asynchronous Ring operation. Th
 Options:
 - `:allowed-origins` — collection of allowed Origin headers (`nil` permits all origins)
 - `:client-req-timeout-ms` — timeout for client requests in milliseconds (default: 120000)
-- `:sse-queue-capacity` — max number of server-to-client messages buffered per session while no SSE stream is attached (default: 1024). When the queue is full, `send-to-client` drops the oldest queued message to make room for the newest; on a failed write the in-flight batch is re-queued at the head and any over-capacity newest entries at the tail are dropped to keep older retried items.
+- `:sse-queue-capacity` — bounded buffer for server-to-client messages produced while no SSE stream is attached (default: 1024)
+- `:sse-replay-capacity` — bounded replay buffer for `Last-Event-ID` resumability on GET reconnect (default: same as `:sse-queue-capacity`)
 
 ### Synchronous vs asynchronous Ring
 
-`ring-handler` returns a function that supports both Ring arities, but the GET SSE channel behaves differently depending on which one your adapter invokes:
+The GET SSE channel behaves differently depending on which Ring arity your adapter invokes:
 
-- **Synchronous (1-arity)**: the response body's `write-body-to-stream` runs to completion before the Ring adapter closes the underlying `OutputStream`. The implementation drains any queued messages onto the stream and then detaches it. Server-initiated requests/notifications produced *after* the GET returns are queued (bounded, see `:sse-queue-capacity`) and delivered on the *next* `GET /mcp`.
-- **Asynchronous (3-arity)**: the response body keeps the `OutputStream` registered on the session, so subsequent `send-notification` / `send-request` calls write to the live SSE stream immediately. The stream is detached on `DELETE /mcp` or on the first `IOException` (e.g. client disconnect), after which subsequent messages re-queue until the next `GET /mcp`.
+- **Synchronous (1-arity)**: the GET delivers any pending messages and detaches. Subsequent server-initiated requests/notifications are queued and delivered on the next `GET /mcp`.
+- **Asynchronous (3-arity)**: the SSE stream stays open and live server-initiated messages are written to it immediately, until the client disconnects or `DELETE /mcp` is called.
 
-Use an async Ring adapter when you want live server-to-client streaming over a long-lived SSE connection. Use the sync adapter only if your deployment polls `GET /mcp` repeatedly or if you do not initiate server-side requests.
-
-Stage 1 of the Streamable HTTP transport keeps SSE strictly GET-owned: `POST` responses are always plain `application/json` (or `202 No Content` for notifications and client responses). `Last-Event-ID` based resumability is not yet supported — a new `GET /mcp` starts from the current queue head.
+Use an async Ring adapter for live server-to-client streaming over a long-lived SSE connection. Use the sync adapter only if your deployment polls `GET /mcp` or does not initiate server-side requests. Reconnecting clients may supply the standard `Last-Event-ID` header on `GET /mcp` to resume from the per-session replay buffer.
 
 ### Protocol headers
 

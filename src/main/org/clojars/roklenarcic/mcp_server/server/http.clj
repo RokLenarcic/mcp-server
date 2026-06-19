@@ -20,7 +20,8 @@
             [org.clojars.roklenarcic.mcp-server.util :refer [papply]])
   (:import (java.security SecureRandom)
            (java.util Base64)
-           (java.util.concurrent CompletableFuture ConcurrentHashMap LinkedBlockingDeque)))
+           (java.util.concurrent CompletableFuture ConcurrentHashMap LinkedBlockingDeque)
+           (java.util.concurrent.atomic AtomicLong)))
 
 ;; --- session id generation -------------------------------------------------
 
@@ -119,20 +120,31 @@
 (defn create-session
   "Builds a fresh HTTP session atom from `session-map`, assigning a new
   `::mcp/id`, wiring in the SSE send-to-client function, the bounded outbound
-  queue, and the change watcher. The session is NOT added to any store; the
-  caller decides when (and whether) to register it via `add-session`.
+  queue, the bounded SSE replay buffer, and the change watcher. The session
+  is NOT added to any store; the caller decides when (and whether) to
+  register it via `add-session`.
 
   The outbound queue is bounded by `::mcp/sse-queue-capacity` (default 1024)
-  so a slow or disconnected client cannot grow memory without bound; when the
-  queue is full the oldest queued message is dropped to make room."
+  so a slow or disconnected client cannot grow memory without bound; when
+  the queue is full the oldest queued message is dropped to make room.
+
+  The replay buffer is bounded by `::mcp/sse-replay-capacity` (default
+  matches `::mcp/sse-queue-capacity`) and holds events that were written
+  successfully so they can be re-sent on a GET reconnect that supplies a
+  `Last-Event-ID` header. When full the oldest entry is dropped."
   [session-map]
   (let [capacity (or (::mcp/sse-queue-capacity session-map) 1024)
-        session (atom session-map)]
+        replay-cap (or (::mcp/sse-replay-capacity session-map) capacity)
+        session (atom session-map)
+        send-to-client (sse/send-to-client-fn session)]
     (swap! session assoc
            ::mcp/id (new-session-id)
            ::mcp/session-creation-time (System/currentTimeMillis)
-           ::mcp/send-to-client (sse/send-to-client-fn session)
-           ::mcp/q (LinkedBlockingDeque. (int capacity)))
+           ::mcp/send-mutex (Object.)
+           ::mcp/sse-next-event-id (AtomicLong. 0)
+           ::mcp/q (LinkedBlockingDeque. (int capacity))
+           ::mcp/replay-buffer (LinkedBlockingDeque. (int replay-cap))
+           ::mcp/send-to-client send-to-client)
     (add-watch session ::watcher handler/change-watcher)
     session))
 
@@ -204,14 +216,26 @@
     (papply (rpc/handle-parsed parsed dispatch-table session req)
             post-response (:item-type parsed) serde)))
 
+(defn- parse-event-id
+  "Parses a `Last-Event-ID` header value into a Long; returns nil if blank,
+  missing, or non-numeric."
+  [s]
+  (when-let [trimmed (some-> s str/trim not-empty)]
+    (try
+      (Long/parseLong trimmed)
+      (catch NumberFormatException _ nil))))
+
 (defn- handle-get
   "Handles a GET routed to an existing session: open an SSE stream that
-  carries server-originated requests and notifications."
+  carries server-originated requests and notifications. Honors a
+  `Last-Event-ID` header by replaying buffered events with a higher
+  event-id before live delivery resumes."
   [req session sync?]
   (.close (:body req))
-  {:status 200
-   :headers sse/streaming-headers
-   :body (sse/get-resp session sync?)})
+  (let [last-event-id (parse-event-id (header req "last-event-id"))]
+    {:status 200
+     :headers sse/streaming-headers
+     :body (sse/get-resp session sync? last-event-id)}))
 
 (defn- handle-delete
   "Terminates the named session: removes it from the store and detaches any
@@ -326,17 +350,24 @@
     - :sse-queue-capacity - max number of messages buffered per session while
       no SSE stream is attached (default 1024). When full, the oldest queued
       message is dropped to make room for the newest.
+    - :sse-replay-capacity - max number of successfully-written events
+      retained per session for `Last-Event-ID` replay on reconnect
+      (default: same as :sse-queue-capacity). When full, the oldest
+      replay entry is dropped first.
 
   Returns a Ring handler that supports both 1-arity (synchronous) and
   3-arity (asynchronous) Ring operation."
-  [session-template sessions {:keys [allowed-origins client-req-timeout-ms sse-queue-capacity]}]
+  [session-template sessions {:keys [allowed-origins client-req-timeout-ms
+                                     sse-queue-capacity sse-replay-capacity]}]
   (log/debug "Creating Ring handler for MCP Streamable HTTP")
   (let [origins (if allowed-origins (set allowed-origins) (constantly true))
         timeout (or client-req-timeout-ms 120000)
         capacity (or sse-queue-capacity 1024)
+        replay-cap (or sse-replay-capacity capacity)
         session-map-of #(assoc @session-template
                                ::mcp/timeout-ms timeout
-                               ::mcp/sse-queue-capacity capacity)]
+                               ::mcp/sse-queue-capacity capacity
+                               ::mcp/sse-replay-capacity replay-cap)]
     (fn
       ([req]
        (rpc/cleanup-requests timeout)

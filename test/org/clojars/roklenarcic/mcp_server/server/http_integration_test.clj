@@ -60,19 +60,29 @@
                     :socket-timeout 2000
                     :connection-timeout 2000})))
 
-(defn- parse-sse-body
-  "Parses an SSE response body into a vector of JSON-decoded events.
+(defn- parse-sse-events
+  "Parses an SSE response body into a vector of `{:event-id :data}` maps.
 
-  Each event is `data: <json>\\n\\n`; we split on the SSE event terminator,
-  strip the `data: ` prefix, and parse each payload via charred. Keys come
+  Each event has the shape `id: <event-id>\\ndata: <json>\\n\\n`; we split
+  on the SSE event terminator, pull the `id:` and `data:` lines, parse
+  the data payload via charred, and parse the id as a Long. Keys come
   back as strings to match the other tests in this namespace."
   [body]
   (->> (str/split body #"\n\n")
        (remove str/blank?)
        (mapv (fn [event]
-               (-> event
-                   (subs (count "data: "))
-                   json/read-json)))))
+               (let [lines (str/split-lines event)
+                     id-line (some #(when (str/starts-with? % "id: ") %) lines)
+                     data-line (some #(when (str/starts-with? % "data: ") %) lines)]
+                 {:event-id (when id-line (Long/parseLong (subs id-line (count "id: "))))
+                  :data (json/read-json (subs data-line (count "data: ")))})))))
+
+(defn- parse-sse-body
+  "Parses an SSE response body into a vector of JSON-decoded events (data only).
+
+  See `parse-sse-events` for a variant that also returns the SSE event id."
+  [body]
+  (mapv :data (parse-sse-events body)))
 
 (defn delete-request
   ([url] (delete-request url {}))
@@ -371,6 +381,42 @@
             (is (= 202 (:status right-response)))
             (is (.isDone fut-a))
             (is (= {:answer "right"} (.get fut-a 1 TimeUnit/SECONDS)))))
+        (finally
+          (stop-test-server server-info))))))
+
+(deftest http-get-sse-last-event-id-replay-test
+  (testing "GET reconnect with Last-Event-ID replays only events newer than the supplied id"
+    (let [session-template (create-test-session)
+          server-info (start-test-server session-template)
+          session-id (initialize-session)
+          session (http/get-session (:sessions server-info) session-id)]
+      (try
+        ;; Queue three notifications before any SSE stream is attached.
+        (rpc/send-notification session "notifications/message" {:level "info" :data "a"})
+        (rpc/send-notification session "notifications/message" {:level "info" :data "b"})
+        (rpc/send-notification session "notifications/message" {:level "info" :data "c"})
+        (let [first-resp (get-request base-url {"Mcp-Session-Id" session-id})
+              first-events (parse-sse-events (:body first-resp))]
+          (is (= 200 (:status first-resp)))
+          (is (= 3 (count first-events)))
+          (is (= [1 2 3] (mapv :event-id first-events)))
+          ;; In sync Ring mode the previous GET detaches its stream on
+          ;; return, so the next notification is queued.
+          (rpc/send-notification session "notifications/message" {:level "info" :data "d"})
+          (let [second-resp (get-request base-url {"Mcp-Session-Id" session-id
+                                                   "Last-Event-ID" "2"})
+                second-events (parse-sse-events (:body second-resp))]
+            (is (= 200 (:status second-resp)))
+            ;; Replay buffer yields event 3 (eid > 2); queue drain yields
+            ;; event 4 from the notification queued after the disconnect.
+            (is (= [3 4] (mapv :event-id second-events)))
+            (is (match? [{"jsonrpc" "2.0"
+                          "method" "notifications/message"
+                          "params" {"level" "info" "data" "c"}}
+                         {"jsonrpc" "2.0"
+                          "method" "notifications/message"
+                          "params" {"level" "info" "data" "d"}}]
+                        (mapv :data second-events)))))
         (finally
           (stop-test-server server-info))))))
 
