@@ -120,6 +120,31 @@
           result (resources/templates-list session {} {})]
       (is (match? {:resourceTemplates [template]} result)))))
 
+(deftest resources-templates-list-pagination-test
+  (testing "templates sorted by name and paginated when ::mcp/page-size is set"
+    (let [t1 {:uriTemplate "file:///{name}.txt" :name "Alpha" :description "A"}
+          t2 {:uriTemplate "file:///{name}.txt" :name "Beta"  :description "B"}
+          t3 {:uriTemplate "file:///{name}.txt" :name "Gamma" :description "G"}
+          session (atom {::mcp/page-size 1
+                         ::mcp/handlers {:resource-templates [t3 t1 t2]}})]
+      (let [p1 (resources/templates-list session {} {})
+            p2 (resources/templates-list session {} {:cursor (:nextCursor p1)})
+            p3 (resources/templates-list session {} {:cursor (:nextCursor p2)})]
+        (is (= "Alpha" (-> p1 :resourceTemplates first :name)))
+        (is (= "Alpha" (:nextCursor p1)))
+        (is (= "Beta" (-> p2 :resourceTemplates first :name)))
+        (is (= "Beta" (:nextCursor p2)))
+        (is (= "Gamma" (-> p3 :resourceTemplates first :name)))
+        (is (nil? (:nextCursor p3))))))
+
+  (testing "stale cursor returns first page"
+    (let [t1 {:uriTemplate "file:///{name}.txt" :name "Alpha"}
+          t2 {:uriTemplate "file:///{name}.txt" :name "Beta"}
+          session (atom {::mcp/page-size 1
+                         ::mcp/handlers {:resource-templates [t1 t2]}})]
+      (let [result (resources/templates-list session {} {:cursor "Zzz-unknown"})]
+        (is (= "Alpha" (-> result :resourceTemplates first :name)))))))
+
 (deftest wrap-resource-test
   (testing "Wrap resource with valid parameters"
     (let [handler (fn [exchange res] {:success true :uri (:uri res)})

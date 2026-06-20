@@ -9,7 +9,8 @@
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.resources :as res]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]])
+             [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination]
+             [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (defn resources'
@@ -165,9 +166,15 @@
   (when (::mcp/initialized? @rpc-session)
     (rpc/send-notification rpc-session "notifications/resources/list_changed" nil)))
 
-(defn templates-list [rpc-session req-meta _]
+(defn templates-list [rpc-session req-meta {:keys [cursor] :as _params}]
   (log/trace "Templates list called")
-  {:resourceTemplates (get-in @rpc-session [::mcp/handlers :resource-templates])})
+  (let [templates (get-in @rpc-session [::mcp/handlers :resource-templates])]
+    (if templates
+      (let [page-size (::mcp/page-size @rpc-session)
+            sorted    (sort-by :name templates)
+            {:keys [items nextCursor]} (pagination/paginate sorted :name cursor page-size)]
+        (?assoc {:resourceTemplates items} :nextCursor nextCursor))
+      {:resourceTemplates nil})))
 
 (defn ->resource-template [all]
   (-> all
