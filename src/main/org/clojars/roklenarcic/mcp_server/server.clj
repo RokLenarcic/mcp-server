@@ -279,7 +279,7 @@
    The server will run until the input stream is closed or the thread is interrupted.
    Interrupting the thread will cause the server to stop gracefully."
   [session-template input-stream output-stream opts]
-  (streams/run (streams/create-session session-template output-stream) input-stream opts))
+  (streams/run session-template input-stream output-stream opts))
 
 (defn notify-resource-changed
   "Notifies the client that a resource has changed, if subscriptions are enabled

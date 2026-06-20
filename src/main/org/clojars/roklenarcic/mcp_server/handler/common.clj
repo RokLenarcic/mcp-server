@@ -10,7 +10,7 @@
             [org.clojars.roklenarcic.mcp-server.handler.logging :as h.logging]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]])
-   (:import (java.io ByteArrayOutputStream InputStream OutputStream)
+  (:import (java.io ByteArrayOutputStream InputStream)
            (java.util Base64 UUID)
            (java.util.concurrent CompletableFuture ConcurrentHashMap)))
 

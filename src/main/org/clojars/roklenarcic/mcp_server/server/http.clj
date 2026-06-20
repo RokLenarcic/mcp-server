@@ -54,7 +54,7 @@
     (log/trace "Deleting session:" session-id)
     (.remove storage session-id))
   (add-session [_ ss]
-    (let [session-id (::mcp/id @(.session ss))]
+    (let [session-id (::mcp/id @(:session ss))]
       (assert session-id "session must have ::mcp/id set before being added")
       (.put storage session-id ss)
       (log/debug "Session registered:" session-id)
@@ -245,7 +245,7 @@
       (and (= :request (:item-type parsed))
            (= "initialize" (:method parsed)))
       (let [ss (create-session session-map)
-            session (.session ss)]
+            session (:session ss)]
         (papply (rpc/handle-parsed parsed (::mcp/dispatch-table session-map) session req)
                 (fn [r]
                   (if (and (map? r) (not (:error r)))
@@ -273,7 +273,7 @@
   block on a CompletableFuture result (sync adapter) or attach a callback
   and return immediately (async adapter)."
   [req ^StreamableSession ss sync?]
-  (let [session (.session ss)
+  (let [session (:session ss)
         {::mcp/keys [dispatch-table serde]} @session
         parsed (parse-body req serde)
         dispatch #(rpc/handle-parsed parsed dispatch-table session req)]
@@ -287,10 +287,7 @@
   "Parses a `Last-Event-ID` header value into a Long; returns nil if blank,
   missing, or non-numeric."
   [s]
-  (when-let [trimmed (some-> s str/trim not-empty)]
-    (try
-      (Long/parseLong trimmed)
-      (catch NumberFormatException _ nil))))
+  (some-> s str/trim not-empty parse-long))
 
 (defn- handle-get
   "Handles a GET routed to an existing session: open an SSE stream that
@@ -304,14 +301,6 @@
      :headers sse/streaming-headers
      :body (sse/get-resp ss sync? last-event-id)}))
 
-(defn- handle-delete
-  "Terminates the named session: removes it from the store and closes any
-  attached GET-SSE stream. Returns 200."
-  [sessions session-id]
-  (when-let [^StreamableSession ss (delete-session sessions session-id)]
-    (sse/set-os! ss nil))
-  (empty-resp 200))
-
 ;; --- routing ---------------------------------------------------------------
 
 (defn- post-headers-error
@@ -324,60 +313,54 @@
                 "Content-Type must be application/json" serde)
 
     (let [accept (header req "accept")]
-      (not (and (accepts? accept "application/json")
-                (accepts? accept "text/event-stream"))))
+      (not (accepts? accept "text/event-stream")))
     (error-resp 406 parse/INVALID_REQUEST "Not Acceptable"
-                "Accept must include application/json and text/event-stream"
+                "Accept must include text/event-stream"
                 serde)))
 
 (defn- route-post
-  [req sessions session-map sync?]
-  (let [serde (::mcp/serde session-map)]
-    (or (post-headers-error req serde)
-        (if-let [session-id (header req "mcp-session-id")]
-          (if-let [ss (get-session sessions session-id)]
-            (if (protocol-version-ok? req)
-              (handle-session-post req ss sync?)
-              (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
-                          (str "Unsupported MCP-Protocol-Version: "
-                               (header req "mcp-protocol-version"))
-                          serde))
-            (error-resp 404 parse/INVALID_REQUEST "Not Found"
-                        "Session not found" serde))
-          (handle-init-post req sessions session-map)))))
-
-(defn- route-get
-  [req sessions session-map sync?]
-  (let [serde (::mcp/serde session-map)]
-    (cond
-      (not (accepts? (header req "accept") "text/event-stream"))
-      (error-resp 406 parse/INVALID_REQUEST "Not Acceptable"
-                  "Accept must include text/event-stream" serde)
-
-      :else
+  [req sessions {::mcp/keys [serde] :as session-map} sync?]
+  (or (post-headers-error req serde)
       (if-let [session-id (header req "mcp-session-id")]
         (if-let [ss (get-session sessions session-id)]
           (if (protocol-version-ok? req)
-            (handle-get req ss sync?)
+            (handle-session-post req ss sync?)
             (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
                         (str "Unsupported MCP-Protocol-Version: "
                              (header req "mcp-protocol-version"))
                         serde))
           (error-resp 404 parse/INVALID_REQUEST "Not Found"
                       "Session not found" serde))
-        (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
-                    "Mcp-Session-Id header required" serde)))))
+        (handle-init-post req sessions session-map))))
 
-(defn- route-delete
-  [req sessions session-map]
-  (let [serde (::mcp/serde session-map)]
+(defn- route-get
+  [req sessions {::mcp/keys [serde]} sync?]
+  (if (accepts? (header req "accept") "text/event-stream")
     (if-let [session-id (header req "mcp-session-id")]
-      (if (get-session sessions session-id)
-        (handle-delete sessions session-id)
+      (if-let [ss (get-session sessions session-id)]
+        (if (protocol-version-ok? req)
+          (handle-get req ss sync?)
+          (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                      (str "Unsupported MCP-Protocol-Version: "
+                           (header req "mcp-protocol-version"))
+                      serde))
         (error-resp 404 parse/INVALID_REQUEST "Not Found"
                     "Session not found" serde))
       (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
-                  "Mcp-Session-Id header required" serde))))
+                  "Mcp-Session-Id header required" serde))
+    (error-resp 406 parse/INVALID_REQUEST "Not Acceptable"
+                "Accept must include text/event-stream" serde)))
+
+(defn- route-delete
+  [req sessions {::mcp/keys [serde]}]
+  (if-let [session-id (header req "mcp-session-id")]
+    (if-let [^StreamableSession ss (delete-session sessions session-id)]
+      (do (sse/set-os! ss nil)
+          (empty-resp 200))
+      (error-resp 404 parse/INVALID_REQUEST "Not Found"
+                  "Session not found" serde))
+    (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
+                "Mcp-Session-Id header required" serde)))
 
 (defn handle-common
   "Dispatches an HTTP request to the appropriate route after the origin check."

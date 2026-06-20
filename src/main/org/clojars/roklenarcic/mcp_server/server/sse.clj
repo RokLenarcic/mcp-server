@@ -191,7 +191,7 @@
 
   Must be called under `send-mutex` so producers see a consistent stream state."
   [^StreamableSession ss new-os]
-  (let [[old _] (reset-vals! (.os ss) new-os)]
+  (let [[old _] (reset-vals! (:os ss) new-os)]
     (when (and old (not (identical? old new-os)))
       (try (.close ^OutputStream old)
            (catch IOException e
@@ -202,7 +202,7 @@
   still the registered stream. Does not attempt to close the OutputStream —
   this is called after a write failure when the stream is already broken."
   [^StreamableSession ss os]
-  (swap! (.os ss) #(if (identical? os %) nil %)))
+  (swap! (:os ss) #(if (identical? os %) nil %)))
 
 (defn register-post-stream
   "Adds `os` to the StreamableSession's set of in-flight POST-response SSE
@@ -217,8 +217,8 @@
   to a concurrent `send-to-client-fn` consistently with the GET stream
   check it performs in the same critical section."
   [^StreamableSession ss os]
-  (locking (.send-mutex ss)
-    (swap! (.post-streams ss) conj os)))
+  (locking (:send-mutex ss)
+    (swap! (:post-streams ss) conj os)))
 
 (defn deregister-post-stream
   "Removes `os` from the StreamableSession's set of in-flight POST-response
@@ -233,8 +233,8 @@
   this from a `finally` clause after `write-post-response-and-deregister`
   has already removed the stream as part of an atomic write+deregister."
   [^StreamableSession ss os]
-  (locking (.send-mutex ss)
-    (swap! (.post-streams ss) disj os)))
+  (locking (:send-mutex ss)
+    (swap! (:post-streams ss) disj os)))
 
 (defn- write-event
   "Writes a single SSE frame to `os` as UTF-8 bytes in a single
@@ -276,7 +276,7 @@
   item."
   [^StreamableSession ss ^OutputStream os ^LinkedBlockingDeque q record]
   (let [batch (ArrayList.)
-        ^LinkedBlockingDeque replay (.replay-buffer ss)
+        ^LinkedBlockingDeque replay (:replay-buffer ss)
         attempted (volatile! 0)]
     (.drainTo q batch)
     (when record
@@ -316,7 +316,7 @@
   On IOException the stream is detached via `close-os`. The replay buffer
   is left intact so subsequent reconnects can attempt the same replay."
   [^StreamableSession ss ^OutputStream os last-event-id]
-  (let [^LinkedBlockingDeque replay (.replay-buffer ss)]
+  (let [^LinkedBlockingDeque replay (:replay-buffer ss)]
     (when last-event-id
       (let [events (->> (iterator-seq (.iterator replay))
                         (filter (fn [[eid _ _]] (> eid last-event-id))))]
@@ -352,7 +352,7 @@
     true
     (catch IOException e
       (log/debug e "POST-SSE fallback write or flush failed; deregistering")
-      (swap! (.post-streams ss) disj os)
+      (swap! (:post-streams ss) disj os)
       false)))
 
 (defn write-post-response-and-deregister
@@ -379,16 +379,16 @@
   already past handler dispatch and there is no useful place to report a
   failed final write to."
   [^StreamableSession ss ^OutputStream os msg]
-  (locking (.send-mutex ss)
+  (locking (:send-mutex ss)
     (when msg
-      (let [event-id (.incrementAndGet ^AtomicLong (.sse-next-event-id ss))
+      (let [event-id (.incrementAndGet ^AtomicLong (:sse-next-event-id ss))
             record [event-id (System/currentTimeMillis) msg]]
         (try
           (write-event os record)
           (.flush os)
           (catch IOException e
             (log/debug e "POST-SSE response write or flush failed")))))
-    (swap! (.post-streams ss) disj os)))
+    (swap! (:post-streams ss) disj os)))
 
 (defn send-to-client-fn
   "Returns a function that sends `msg` to the client.
@@ -421,15 +421,15 @@
   [^StreamableSession ss]
   (fn [msg]
     (when msg
-      (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(.session ss)]
-        (locking (.send-mutex ss)
-          (when timeout-ms
-            (cleanup-buffer q timeout-ms)
-            (cleanup-buffer (.replay-buffer ss) timeout-ms))
-          (let [event-id (.incrementAndGet ^AtomicLong (.sse-next-event-id ss))
+      (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(:session ss)]
+        (when timeout-ms
+          (cleanup-buffer q timeout-ms)
+          (cleanup-buffer (:replay-buffer ss) timeout-ms))
+        (locking (:send-mutex ss)
+          (let [event-id (.incrementAndGet ^AtomicLong (:sse-next-event-id ss))
                 record [event-id (System/currentTimeMillis) msg]
-                os @(.os ss)
-                post-streams @(.post-streams ss)
+                os @(:os ss)
+                post-streams @(:post-streams ss)
                 bound *post-stream*
                 bound-ok? (when bound (write-to-post-stream ss bound record))]
             (cond
@@ -490,17 +490,17 @@
     (write-body-to-stream [_ _ os]
       ;; Flush so the client sees the 200 + headers immediately.
       (.flush ^OutputStream os)
-      (locking (.send-mutex ss)
+      (locking (:send-mutex ss)
         (set-os! ss os)
-        (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(.session ss)]
+        (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(:session ss)]
           (when timeout-ms
             (cleanup-buffer q timeout-ms)
-            (cleanup-buffer (.replay-buffer ss) timeout-ms))
+            (cleanup-buffer (:replay-buffer ss) timeout-ms))
           (when last-event-id
             (replay-events ss os last-event-id))
           ;; Only drain the pending queue if the replay write didn't
           ;; detach the stream.
-          (when (identical? os @(.os ss))
+          (when (identical? os @(:os ss))
             (write-responses ss os q nil)))
         (when sync?
           (close-os ss os))))))

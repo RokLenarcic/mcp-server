@@ -48,7 +48,7 @@
 (deftest write-responses-happy-path-test
   (testing "Drains the queue then writes the new record to the stream with id: + data:"
     (let [ss (streamable-session)
-          q  (::mcp/q @(.session ss))
+          q  (::mcp/q @(:session ss))
           os (ByteArrayOutputStream.)]
       (.offer q (record 1 "first"))
       (.offer q (record 2 "second"))
@@ -61,7 +61,7 @@
 (deftest write-responses-drain-only-test
   (testing "With nil record, drains the queue and writes nothing else"
     (let [ss (streamable-session)
-          q  (::mcp/q @(.session ss))
+          q  (::mcp/q @(:session ss))
           os (ByteArrayOutputStream.)]
       (.offer q (record 7 "only"))
       (sse/set-os! ss os)
@@ -72,8 +72,8 @@
 (deftest write-responses-appends-to-replay-on-success-test
   (testing "On successful write+flush the batch is appended to the replay buffer in order"
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)]
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
@@ -86,8 +86,8 @@
 (deftest write-responses-replay-buffer-respects-capacity-test
   (testing "Replay buffer at capacity drops oldest to make room for newest written events"
     (let [ss     (streamable-session 16 2)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)]
       (.offer replay (record 1 "old"))
       (sse/set-os! ss os)
@@ -101,13 +101,13 @@
 event is treated as attempted (goes to the replay buffer) and the rest of
 the batch is re-queued at the head."
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (failing-os)]
       (.offer q (record 1 "queued-msg"))
       (sse/set-os! ss os)
       (sse/write-responses ss os q (record 2 "new-msg"))
-      (is (nil? @(.os ss)) "Stream is detached after IOException")
+      (is (nil? @(:os ss)) "Stream is detached after IOException")
       (is (= [[1 "queued-msg"]] (mapv (juxt first third) (queue-vec replay)))
           "The drained event whose write was attempted (and failed) is in the replay buffer")
       (is (= [[2 "new-msg"]] (mapv (juxt first third) (queue-vec q)))
@@ -118,13 +118,13 @@ the batch is re-queued at the head."
 attempted-but-unconfirmed and goes to the replay buffer; nothing is
 re-queued."
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (flush-failing-os)]
       (.offer q (record 1 "queued-msg"))
       (sse/set-os! ss os)
       (sse/write-responses ss os q (record 2 "new-msg"))
-      (is (nil? @(.os ss)) "Stream is detached on flush failure")
+      (is (nil? @(:os ss)) "Stream is detached on flush failure")
       (is (zero? (.size q)) "Nothing is re-queued; all events were attempted")
       (is (= [[1 "queued-msg"] [2 "new-msg"]]
              (mapv (juxt first third) (queue-vec replay)))
@@ -134,14 +134,14 @@ re-queued."
   (testing "Drain-only failure (no new record): the failing event lands in
 the replay buffer and the remainder is re-queued at the head."
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (failing-os)]
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
       (sse/set-os! ss os)
       (sse/write-responses ss os q nil)
-      (is (nil? @(.os ss)))
+      (is (nil? @(:os ss)))
       (is (= [[1 "a"]] (mapv (juxt first third) (queue-vec replay))))
       (is (= [[2 "b"]] (mapv (juxt first third) (queue-vec q)))
           "Only the not-yet-attempted entry is re-queued"))))
@@ -162,14 +162,14 @@ the replay buffer and the remainder is re-queued at the head."
 of any item enqueued concurrently after the drain. The attempted-and-failed
 event ends up in the replay buffer."
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (write-injecting-failing-os q (record 99 "tail"))]
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
       (sse/set-os! ss os)
       (sse/write-responses ss os q nil)
-      (is (nil? @(.os ss)))
+      (is (nil? @(:os ss)))
       (is (= [[1 "a"]] (mapv (juxt first third) (queue-vec replay)))
           "The first event was attempted and failed; it goes to the replay buffer")
       (is (= [[2 "b"] [99 "tail"]] (mapv (juxt first third) (queue-vec q)))
@@ -197,8 +197,8 @@ event ends up in the replay buffer."
 events 0..k go to the replay buffer (attempted-and-ambiguous, including the
 one that threw) and events k+1..end are re-queued at the head."
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (write-after-n-failing-os 2)] ;; events 1 and 2 succeed, event 3 throws
       (.offer q (record 1 "a"))
       (.offer q (record 2 "b"))
@@ -206,7 +206,7 @@ one that threw) and events k+1..end are re-queued at the head."
       (.offer q (record 4 "d"))
       (sse/set-os! ss os)
       (sse/write-responses ss os q nil)
-      (is (nil? @(.os ss)))
+      (is (nil? @(:os ss)))
       (is (= [[1 "a"] [2 "b"] [3 "c"]]
              (mapv (juxt first third) (queue-vec replay)))
           "Successful writes plus the throwing write all land in the replay buffer")
@@ -218,7 +218,7 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest replay-events-writes-only-events-newer-than-last-event-id-test
   (testing "replay-events writes only events with event-id > last-event-id, in order"
     (let [ss     (streamable-session)
-          replay (.replay-buffer ss)
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)]
       (.offer replay (record 1 "a"))
       (.offer replay (record 2 "b"))
@@ -231,7 +231,7 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest replay-events-skips-when-nothing-newer-test
   (testing "replay-events writes nothing when last-event-id is at or above the highest buffered id"
     (let [ss     (streamable-session)
-          replay (.replay-buffer ss)
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)]
       (.offer replay (record 1 "a"))
       (.offer replay (record 2 "b"))
@@ -242,7 +242,7 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest replay-events-noop-on-nil-last-event-id-test
   (testing "replay-events does nothing when last-event-id is nil"
     (let [ss     (streamable-session)
-          replay (.replay-buffer ss)
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)]
       (.offer replay (record 1 "a"))
       (sse/set-os! ss os)
@@ -252,13 +252,13 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest replay-events-detaches-on-write-failure-but-leaves-buffer-test
   (testing "On IOException replay-events detaches the stream but leaves the replay buffer intact"
     (let [ss     (streamable-session)
-          replay (.replay-buffer ss)
+          replay (:replay-buffer ss)
           os     (failing-os)]
       (.offer replay (record 1 "a"))
       (.offer replay (record 2 "b"))
       (sse/set-os! ss os)
       (sse/replay-events ss os 0)
-      (is (nil? @(.os ss)))
+      (is (nil? @(:os ss)))
       (is (= 2 (.size replay))
           "Replay buffer is preserved so a future reconnect can re-attempt"))))
 
@@ -267,7 +267,7 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest send-to-client-fn-assigns-monotonic-event-ids-test
   (testing "Each call assigns a strictly increasing event id from the AtomicLong counter"
     (let [ss    (streamable-session)
-          q     (::mcp/q @(.session ss))
+          q     (::mcp/q @(:session ss))
           send! (sse/send-to-client-fn ss)]
       (send! "a")
       (send! "b")
@@ -279,7 +279,7 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest send-to-client-fn-drops-oldest-when-queue-full-test
   (testing "send-to-client-fn enqueues at the tail and drops the oldest entry when the bounded queue is full"
     (let [ss    (streamable-session 2 16)
-          q     (::mcp/q @(.session ss))
+          q     (::mcp/q @(:session ss))
           send! (sse/send-to-client-fn ss)]
       (send! "a")
       (send! "b")
@@ -291,8 +291,8 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest send-to-client-fn-writes-immediately-when-stream-attached-test
   (testing "When GET stream is set, send-to-client-fn writes directly to the stream and does not enqueue"
     (let [ss     (streamable-session)
-          q      (::mcp/q @(.session ss))
-          replay (.replay-buffer ss)
+          q      (::mcp/q @(:session ss))
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)
           _      (sse/set-os! ss os)
           send!  (sse/send-to-client-fn ss)]
@@ -305,8 +305,8 @@ one that threw) and events k+1..end are re-queued at the head."
 (deftest send-to-client-fn-noop-on-nil-msg-test
   (testing "Passing nil does not allocate an event id or touch the queue"
     (let [ss      (streamable-session)
-          q       (::mcp/q @(.session ss))
-          counter ^AtomicLong (.sse-next-event-id ss)
+          q       (::mcp/q @(:session ss))
+          counter ^AtomicLong (:sse-next-event-id ss)
           send!   (sse/send-to-client-fn ss)]
       (send! nil)
       (is (zero? (.size q)))
@@ -320,22 +320,22 @@ one that threw) and events k+1..end are re-queued at the head."
     (let [ss  (streamable-session)
           os1 (ByteArrayOutputStream.)
           os2 (ByteArrayOutputStream.)]
-      (is (empty? @(.post-streams ss)))
+      (is (empty? @(:post-streams ss)))
       (sse/register-post-stream ss os1)
-      (is (= #{os1} @(.post-streams ss)))
+      (is (= #{os1} @(:post-streams ss)))
       (sse/register-post-stream ss os2)
-      (is (= #{os1 os2} @(.post-streams ss)))
+      (is (= #{os1 os2} @(:post-streams ss)))
       (sse/deregister-post-stream ss os1)
-      (is (= #{os2} @(.post-streams ss)))
+      (is (= #{os2} @(:post-streams ss)))
       (sse/deregister-post-stream ss os2)
-      (is (empty? @(.post-streams ss))))))
+      (is (empty? @(:post-streams ss))))))
 
 (deftest deregister-post-stream-is-idempotent-test
   (testing "Deregistering a stream that is not registered is a no-op"
     (let [ss (streamable-session)
           os (ByteArrayOutputStream.)]
       (sse/deregister-post-stream ss os)
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Disj on a missing entry must not throw"))))
 
 ;; --- send-to-client-fn routing priority -----------------------------------
@@ -354,7 +354,7 @@ the GET stream wins and the POST stream receives nothing."
           "GET-SSE stream received the message")
       (is (= "" (.toString post-os "UTF-8"))
           "POST-SSE stream received nothing")
-      (is (= #{post-os} @(.post-streams ss))
+      (is (= #{post-os} @(:post-streams ss))
           "POST stream remains registered"))))
 
 (deftest send-to-client-fn-falls-back-to-post-stream-when-no-get-test
@@ -363,8 +363,8 @@ receives the event ephemerally; the queue is not touched and the replay
 buffer is not appended (POST streams are not eligible for Last-Event-ID
 resumption)."
     (let [ss      (streamable-session)
-          q       (::mcp/q @(.session ss))
-          replay  (.replay-buffer ss)
+          q       (::mcp/q @(:session ss))
+          replay  (:replay-buffer ss)
           post-os (ByteArrayOutputStream.)
           _       (sse/register-post-stream ss post-os)
           send!   (sse/send-to-client-fn ss)]
@@ -372,7 +372,7 @@ resumption)."
       (is (= "id: 1\ndata: msg\n\n" (.toString post-os "UTF-8")))
       (is (zero? (.size q)) "Queue is not drained nor enqueued to")
       (is (zero? (.size replay)) "Replay buffer is not appended for POST writes")
-      (is (= #{post-os} @(.post-streams ss))
+      (is (= #{post-os} @(:post-streams ss))
           "Successful POST write does not deregister the stream"))))
 
 (deftest send-to-client-fn-post-stream-write-failure-queues-event-test
@@ -380,13 +380,13 @@ resumption)."
 and the event is queued for the next attached stream; the replay buffer is
 not touched."
     (let [ss      (streamable-session)
-          q       (::mcp/q @(.session ss))
-          replay  (.replay-buffer ss)
+          q       (::mcp/q @(:session ss))
+          replay  (:replay-buffer ss)
           post-os (failing-os)
           _       (sse/register-post-stream ss post-os)
           send!   (sse/send-to-client-fn ss)]
       (send! "msg")
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Failed POST stream is deregistered")
       (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
           "Event is queued as fallback")
@@ -395,7 +395,7 @@ not touched."
 (deftest send-to-client-fn-falls-back-to-queue-when-no-streams-test
   (testing "With neither GET-SSE nor POST-SSE streams attached, the message is queued"
     (let [ss    (streamable-session)
-          q     (::mcp/q @(.session ss))
+          q     (::mcp/q @(:session ss))
           send! (sse/send-to-client-fn ss)]
       (send! "msg")
       (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))))))
@@ -418,7 +418,7 @@ correlate with the originating request's response)."
           "Bound POST stream received the message")
       (is (= "" (.toString get-os "UTF-8"))
           "GET-SSE stream received nothing")
-      (is (= #{bound-os} @(.post-streams ss))
+      (is (= #{bound-os} @(:post-streams ss))
           "Successful bound write does not deregister the stream"))))
 
 (deftest send-to-client-fn-bound-post-stream-routes-without-get-test
@@ -436,7 +436,7 @@ over a sibling POST stream registered for a different in-flight request."
           "Bound POST stream received the message")
       (is (= "" (.toString sibling-os "UTF-8"))
           "Sibling POST stream received nothing")
-      (is (= #{bound-os sibling-os} @(.post-streams ss))
+      (is (= #{bound-os sibling-os} @(:post-streams ss))
           "Neither stream was deregistered"))))
 
 (deftest send-to-client-fn-bound-write-failure-falls-through-to-get-test
@@ -450,7 +450,7 @@ and routing falls through to the active GET-SSE stream."
           send!    (sse/send-to-client-fn ss)]
       (binding [sse/*post-stream* bound-os]
         (send! "msg"))
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Failed bound stream is deregistered")
       (is (= "id: 1\ndata: msg\n\n" (.toString get-os "UTF-8"))
           "GET stream took over delivery"))))
@@ -467,7 +467,7 @@ already-attempted bound stream)."
           send!      (sse/send-to-client-fn ss)]
       (binding [sse/*post-stream* bound-os]
         (send! "msg"))
-      (is (= #{sibling-os} @(.post-streams ss))
+      (is (= #{sibling-os} @(:post-streams ss))
           "Failed bound stream is deregistered; sibling remains")
       (is (= "id: 1\ndata: msg\n\n" (.toString sibling-os "UTF-8"))
           "Sibling POST stream took over delivery"))))
@@ -476,7 +476,7 @@ already-attempted bound stream)."
   (testing "When the bound POST stream and every fallback POST stream
 fail, the message is queued for the next attached stream."
     (let [ss         (streamable-session)
-          q          (::mcp/q @(.session ss))
+          q          (::mcp/q @(:session ss))
           bound-os   (failing-os)
           sibling-os (failing-os)
           _          (sse/register-post-stream ss bound-os)
@@ -484,7 +484,7 @@ fail, the message is queued for the next attached stream."
           send!      (sse/send-to-client-fn ss)]
       (binding [sse/*post-stream* bound-os]
         (send! "msg"))
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Both failed POST streams are deregistered")
       (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
           "Event queued as last-resort fallback"))))
@@ -505,7 +505,7 @@ healthy delivery: exactly one of the streams receives the event."
         (is (or (and (= "id: 1\ndata: msg\n\n" s1) (= "" s2))
                 (and (= "id: 1\ndata: msg\n\n" s2) (= "" s1)))
             "Exactly one POST stream receives the message; `some` short-circuits"))
-      (is (= #{os1 os2} @(.post-streams ss))
+      (is (= #{os1 os2} @(:post-streams ss))
           "Neither stream is deregistered (both writes succeeded or were skipped)"))))
 
 (deftest send-to-client-fn-iterates-all-failing-post-streams-and-queues-test
@@ -513,14 +513,14 @@ healthy delivery: exactly one of the streams receives the event."
 stream's write fails, all of them self-deregister and the event is
 queued."
     (let [ss    (streamable-session)
-          q     (::mcp/q @(.session ss))
+          q     (::mcp/q @(:session ss))
           os1   (failing-os)
           os2   (failing-os)
           _     (sse/register-post-stream ss os1)
           _     (sse/register-post-stream ss os2)
           send! (sse/send-to-client-fn ss)]
       (send! "msg")
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Both POST streams are deregistered")
       (is (= [[1 "msg"]] (mapv (juxt first third) (queue-vec q)))
           "Event queued as last-resort fallback"))))
@@ -529,8 +529,8 @@ queued."
   (testing "When `*post-stream*` is bound and is the only registered
 stream, routing delivers directly to it (no queueing, no replay)."
     (let [ss       (streamable-session)
-          q        (::mcp/q @(.session ss))
-          replay   (.replay-buffer ss)
+          q        (::mcp/q @(:session ss))
+          replay   (:replay-buffer ss)
           bound-os (ByteArrayOutputStream.)
           _        (sse/register-post-stream ss bound-os)
           send!    (sse/send-to-client-fn ss)]
@@ -539,7 +539,7 @@ stream, routing delivers directly to it (no queueing, no replay)."
       (is (= "id: 1\ndata: msg\n\n" (.toString bound-os "UTF-8")))
       (is (zero? (.size q)) "Queue is not drained nor enqueued to")
       (is (zero? (.size replay)) "Replay buffer is not appended for POST writes")
-      (is (= #{bound-os} @(.post-streams ss))
+      (is (= #{bound-os} @(:post-streams ss))
           "Successful bound write does not deregister"))))
 
 ;; --- write-post-response-and-deregister -----------------------------------
@@ -551,12 +551,12 @@ stream, routing delivers directly to it (no queueing, no replay)."
           _  (sse/register-post-stream ss os)]
       (sse/write-post-response-and-deregister ss os "{\"jsonrpc\":\"2.0\"}")
       (is (= "id: 1\ndata: {\"jsonrpc\":\"2.0\"}\n\n" (.toString os "UTF-8")))
-      (is (empty? @(.post-streams ss))))))
+      (is (empty? @(:post-streams ss))))))
 
 (deftest write-post-response-and-deregister-skips-replay-buffer-test
   (testing "POST response event is NOT appended to the replay buffer"
     (let [ss     (streamable-session)
-          replay (.replay-buffer ss)
+          replay (:replay-buffer ss)
           os     (ByteArrayOutputStream.)
           _      (sse/register-post-stream ss os)]
       (sse/write-post-response-and-deregister ss os "{\"r\":1}")
@@ -567,13 +567,13 @@ stream, routing delivers directly to it (no queueing, no replay)."
   (testing "When msg is nil, nothing is written and no event id is allocated;
 the stream is still deregistered."
     (let [ss      (streamable-session)
-          counter ^AtomicLong (.sse-next-event-id ss)
+          counter ^AtomicLong (:sse-next-event-id ss)
           os      (ByteArrayOutputStream.)
           _       (sse/register-post-stream ss os)]
       (sse/write-post-response-and-deregister ss os nil)
       (is (= "" (.toString os "UTF-8")) "No bytes written")
       (is (zero? (.get counter)) "Event id counter is not incremented")
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Stream is still deregistered"))))
 
 (deftest write-post-response-and-deregister-swallows-ioexception-test
@@ -583,5 +583,5 @@ streaming body returns normally; the stream is still deregistered."
           os (failing-os)
           _  (sse/register-post-stream ss os)]
       (sse/write-post-response-and-deregister ss os "{\"r\":1}")
-      (is (empty? @(.post-streams ss))
+      (is (empty? @(:post-streams ss))
           "Stream deregistered even when write fails"))))

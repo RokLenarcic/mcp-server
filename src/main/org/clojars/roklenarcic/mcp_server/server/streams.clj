@@ -5,7 +5,14 @@
 
    The caller owns the lifecycle of the input and output streams; this
    namespace does not close them. When `run` returns the caller can close
-   the streams (or reuse them for another session)."
+   the streams (or reuse them for another session).
+
+   `run` mutates the supplied session atom by assoc-ing `::mcp/send-to-client`
+   and installing a change-watcher. Both are removed when `run` returns. If
+   you want to preserve the original atom value across multiple `run`
+   invocations, pass a fresh copy:
+
+     (run (atom @session-template) is os opts)"
   (:require [clojure.java.io :as io]
             [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
@@ -16,31 +23,25 @@
   (:import (java.io BufferedReader InputStream OutputStream)
            (java.nio.channels ClosedByInterruptException)))
 
-(defrecord StreamsSession
-  [session   ;; atom — core protocol state
-   os        ;; OutputStream — caller-owned, never rotated
-   mutex])   ;; Object — serialises writes to os
-
 (defn process
   "Processes a single JSON-RPC message string.
 
    Parameters:
-   - ss: the StreamsSession
+   - session: the session atom containing server state and configuration
    - str-msg: the JSON-RPC message string to process
 
    Returns a JSON-RPC response object or CompletableFuture, or nil for notifications."
-  [^StreamsSession ss str-msg]
-  (let [session (.session ss)]
-    (try
-      (let [{::mcp/keys [dispatch-table serde]} @session]
-        (log/trace "Processing message of length:" (count str-msg))
-        (pcatch (rpc/handle-parsed (rpc/parse-string str-msg serde) dispatch-table session nil)
-                (fn [e]
-                  (log/error e "Error during message processing")
-                  (rpc/make-response (c/internal-error nil (ex-message e)) nil))))
-      (catch Exception e
-        (log/error e "Error during message processing")
-        (rpc/make-response (c/internal-error nil (ex-message e)) nil)))))
+  [session str-msg]
+  (try
+    (let [{::mcp/keys [dispatch-table serde]} @session]
+      (log/trace "Processing message of length:" (count str-msg))
+      (pcatch (rpc/handle-parsed (rpc/parse-string str-msg serde) dispatch-table session nil)
+              (fn [e]
+                (log/error e "Error during message processing")
+                (rpc/make-response (c/internal-error nil (ex-message e)) nil))))
+    (catch Exception e
+      (log/error e "Error during message processing")
+      (rpc/make-response (c/internal-error nil (ex-message e)) nil))))
 
 (defn- await-in-flight
   "Blocks until there are no in-flight requests on the session.
@@ -62,17 +63,16 @@
                  (count (::mcp/in-flight @session))))))
 
 (defn run
-  "Runs the MCP server using the provided input stream for reading JSON-RPC messages.
+  "Runs the MCP server using the provided streams for reading and writing
+   JSON-RPC messages.
 
-   This function implements the main server loop that:
-   1. Reads line-by-line from the input stream
-   2. Processes each JSON-RPC message
-   3. Sends responses back to the client
-   4. Handles client request timeouts
+   Mutates `session-atom` by assoc-ing `::mcp/send-to-client` and
+   installing a change-watcher. Both are removed when `run` returns.
 
    Parameters:
-   - ss: the StreamsSession
+   - session-atom: atom containing the session state (from `server/make-session`)
    - is: InputStream to read JSON-RPC messages from
+   - os: OutputStream to write JSON-RPC responses to
    - opts: options map containing:
      - :client-req-timeout-ms: timeout in milliseconds for client requests (default: 120000)
 
@@ -86,45 +86,7 @@
    not closed; the caller owns their lifecycle.
 
    The function blocks until the server stops."
-  [^StreamsSession ss ^InputStream is {:keys [client-req-timeout-ms]}]
-  (let [session (.session ss)
-        ^BufferedReader r (io/reader is)
-        timeout-ms (or client-req-timeout-ms 120000)]
-    (log/debug "Starting MCP server main loop with timeout:" timeout-ms "ms")
-    (try
-      (loop []
-        (if-let [msg (.readLine r)]
-          (do (rpc/cleanup-requests timeout-ms)
-              (papply (process ss msg)
-                      (fn [response]
-                        (when response
-                          (let [json-response (rpc/json-serialize (::mcp/serde @session) response)]
-                            (log/trace "Sending response of length:" (count json-response))
-                            ((::mcp/send-to-client @session) json-response)))))
-              (recur))
-          (log/info "EOF reached, stopping server")))
-      (catch InterruptedException _
-        (log/info "Stream server interrupted, stopping..."))
-      (catch ClosedByInterruptException _
-        (log/info "Stream server interrupted (channel closed), stopping..."))
-      (finally
-        (await-in-flight session)))))
-
-(defn create-session
-  "Creates a StreamsSession from a template and configures it for stream
-  communication.
-
-   The output stream is captured by the `send-to-client` closure and held on
-   the StreamsSession record; it is not stored in the session atom. The
-   streams transport keeps a single, caller-owned output stream for the
-   lifetime of the session, so there is no rotation to manage.
-
-   Parameters:
-   - session-template: the base session atom to use as a template
-   - os: OutputStream to write JSON-RPC responses to
-
-   Returns a new StreamsSession."
-  [session-template ^OutputStream os]
+  [session-atom ^InputStream is ^OutputStream os {:keys [client-req-timeout-ms]}]
   (let [mutex (Object.)
         write-string-fn (fn [json-str]
                           (log/trace "Writing response to stream:" json-str)
@@ -133,8 +95,27 @@
                               (.write ^String json-str)
                               (.write (int \newline))
                               (.flush))))
-        session (-> (assoc @session-template
-                      ::mcp/send-to-client write-string-fn)
-                    atom)]
-    (add-watch session ::watcher handler/change-watcher)
-    (->StreamsSession session os mutex)))
+        ^BufferedReader r (io/reader is)
+        timeout-ms (or client-req-timeout-ms 120000)]
+    (swap! session-atom assoc ::mcp/send-to-client write-string-fn)
+    (add-watch session-atom ::watcher handler/change-watcher)
+    (log/debug "Starting MCP server main loop with timeout:" timeout-ms "ms")
+    (try
+      (loop []
+        (if-let [msg (.readLine r)]
+          (do (rpc/cleanup-requests timeout-ms)
+              (papply (process session-atom msg)
+                      (fn [response]
+                        (when response
+                          (let [json-response (rpc/json-serialize (::mcp/serde @session-atom) response)]
+                            (log/trace "Sending response of length:" (count json-response))
+                            ((::mcp/send-to-client @session-atom) json-response)))))
+              (recur))
+          (log/info "EOF reached, stopping server")))
+      (catch InterruptedException _
+        (log/info "Stream server interrupted, stopping..."))
+      (catch ClosedByInterruptException _
+        (log/info "Stream server interrupted (channel closed), stopping..."))
+      (finally
+        (remove-watch session-atom ::watcher)
+        (await-in-flight session-atom)))))

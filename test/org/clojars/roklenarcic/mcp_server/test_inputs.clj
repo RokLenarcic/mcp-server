@@ -60,18 +60,17 @@
 
         os2 (PipedOutputStream.)
         out (PipedInputStream. os2)
-        s (streams/create-session (server/make-session
-                                    (server/server-info "Test MCP Server" "1.0.0" "Instructions on how to use this server" true)
-                                    ;(charred/serde {})
-                                    (cheshire/serde {})
-                                    {})
-                                  os2)
+        session (server/make-session
+                  (server/server-info "Test MCP Server" "1.0.0" "Instructions on how to use this server" true)
+                  ;(charred/serde {})
+                  (cheshire/serde {})
+                  {})
         stdin (io/writer os)
         ^BufferedReader stdout (io/reader out)]
-    (future (try (streams/run s is {})
+    (future (try (streams/run session is os2 {})
                  (catch Exception e
                    (log/error e))))
-    {:server s
+    {:server session
      :stdin stdin
      :stdout stdout}))
 
