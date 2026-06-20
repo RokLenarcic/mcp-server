@@ -7,7 +7,8 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]]
-            [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]])
+            [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
+            [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (defn ->prompt
@@ -63,17 +64,22 @@
 
 (defn prompts-list
   "Handles prompts/list requests from the client.
-   
+
    Parameters:
    - rpc-session: the session atom
-   - _: unused parameters
-   
-   Returns a map with :prompts key containing the list of available prompts."
-  [rpc-session req-meta _]
+   - cursor: optional pagination cursor from params
+
+   Returns a map with :prompts key containing the (possibly paginated) list of
+   available prompts. :nextCursor is included only when more pages remain."
+  [rpc-session req-meta {:keys [cursor]}]
   (log/trace "Client requested prompt list")
-  (let [prompts (-> @rpc-session ::mcp/handlers :prompts vals)]
-    (log/debug "Returning" (count prompts) "prompts:" (mapv :name prompts))
-    {:prompts (or (mapv #(dissoc % :handler) prompts) [])}))
+  (let [page-size (::mcp/page-size @rpc-session)
+        prompts (sort-by :name (or (-> @rpc-session ::mcp/handlers :prompts vals) []))
+        {:keys [items nextCursor]} (pagination/paginate
+                                     (mapv #(dissoc % :handler) prompts)
+                                     :name cursor page-size)]
+    (log/debug "Returning" (count items) "prompts")
+    (?assoc {:prompts items} :nextCursor nextCursor)))
 
 (defn prompts-get 
   "Handles prompts/get requests from the client.

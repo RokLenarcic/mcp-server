@@ -46,6 +46,23 @@
           result (prompts/prompts-list session {} {:cursor "page-2"})]
       (is (match? {:prompts vector?} result)))))
 
+(deftest prompts-list-pagination-test
+  (testing "prompts sorted and paginated when ::mcp/page-size is set"
+    (let [make-prompt (fn [n] (server/prompt n n {} {} (fn [_ _] (c/prompt-resp n n))))
+          session (atom {::mcp/page-size 1
+                         ::mcp/handlers {:prompts {"zebra"  (#'prompts/->prompt (make-prompt "zebra"))
+                                                   "ant"    (#'prompts/->prompt (make-prompt "ant"))
+                                                   "monkey" (#'prompts/->prompt (make-prompt "monkey"))}}})]
+      (let [p1 (prompts/prompts-list session {} {})
+            p2 (prompts/prompts-list session {} {:cursor (:nextCursor p1)})
+            p3 (prompts/prompts-list session {} {:cursor (:nextCursor p2)})]
+        (is (= "ant"    (-> p1 :prompts first :name)))
+        (is (= "ant"    (:nextCursor p1)))
+        (is (= "monkey" (-> p2 :prompts first :name)))
+        (is (= "monkey" (:nextCursor p2)))
+        (is (= "zebra"  (-> p3 :prompts first :name)))
+        (is (nil? (:nextCursor p3)))))))
+
 (deftest prompts-get-test
   (testing "Get existing prompt"
     (let [session (atom {::mcp/handlers {:prompts {"weather-prompt" sample-prompt}}
