@@ -23,7 +23,7 @@
            (java.security SecureRandom)
            (java.util Base64)
            (java.util.concurrent CompletableFuture ConcurrentHashMap LinkedBlockingDeque)
-           (java.util.concurrent.atomic AtomicLong)))
+           (org.clojars.roklenarcic.mcp_server.server.sse StreamableSession)))
 
 ;; --- session id generation -------------------------------------------------
 
@@ -37,15 +37,15 @@
 (defprotocol Sessions
   "Storage for HTTP transport sessions."
   (get-session [this session-id]
-    "Returns the session atom for `session-id`, or nil.")
+    "Returns the StreamableSession for `session-id`, or nil.")
   (delete-session [this session-id]
-    "Removes the session and returns the removed session atom, or nil.")
-  (add-session [this session]
-    "Registers `session` in the store using its existing ::mcp/id; returns the
-    session atom. Callers must have set ::mcp/id beforehand (typically via
-    `create-session`).")
+    "Removes the session and returns the removed StreamableSession, or nil.")
+  (add-session [this ss]
+    "Registers `ss` (a StreamableSession) in the store using ::mcp/id from
+    its session atom; returns `ss`. Callers must have set ::mcp/id beforehand
+    (typically via `create-session`).")
   (all-sessions [this]
-    "Returns a seq of all active session atoms."))
+    "Returns a seq of all active StreamableSessions."))
 
 (defrecord MemorySessionStore [^ConcurrentHashMap storage]
   Sessions
@@ -53,12 +53,12 @@
   (delete-session [_ session-id]
     (log/trace "Deleting session:" session-id)
     (.remove storage session-id))
-  (add-session [_ session]
-    (let [session-id (::mcp/id @session)]
+  (add-session [_ ss]
+    (let [session-id (::mcp/id @(.session ss))]
       (assert session-id "session must have ::mcp/id set before being added")
-      (.put storage session-id session)
+      (.put storage session-id ss)
       (log/debug "Session registered:" session-id)
-      session))
+      ss))
   (all-sessions [_]
     (iterator-seq (.iterator (.values storage)))))
 
@@ -120,36 +120,30 @@
 ;; --- session creation ------------------------------------------------------
 
 (defn create-session
-  "Builds a fresh HTTP session atom from `session-map`, assigning a new
+  "Builds a fresh StreamableSession from `session-map`, assigning a new
   `::mcp/id`, wiring in the SSE send-to-client function, the bounded outbound
-  queue, the bounded SSE replay buffer, and the change watcher. The session
-  is NOT added to any store; the caller decides when (and whether) to
-  register it via `add-session`.
+  queue, and the change watcher. The session is NOT added to any store; the
+  caller decides when (and whether) to register it via `add-session`.
 
   The outbound queue is bounded by `::mcp/sse-queue-capacity` (default 1024)
   so a slow or disconnected client cannot grow memory without bound; when
   the queue is full the oldest queued message is dropped to make room.
 
-  The replay buffer is bounded by `::mcp/sse-replay-capacity` (default
-  matches `::mcp/sse-queue-capacity`) and holds events that were written
-  successfully so they can be re-sent on a GET reconnect that supplies a
-  `Last-Event-ID` header. When full the oldest entry is dropped."
+  The replay buffer (held on the StreamableSession record, not in the atom)
+  is bounded by `::mcp/sse-replay-capacity` (default matches
+  `::mcp/sse-queue-capacity`) and holds events that were written successfully
+  so they can be re-sent on a GET reconnect that supplies a `Last-Event-ID`
+  header. When full the oldest entry is dropped."
   [session-map]
   (let [capacity (or (::mcp/sse-queue-capacity session-map) 1024)
         replay-cap (or (::mcp/sse-replay-capacity session-map) capacity)
-        session (atom session-map)
-        send-to-client (sse/send-to-client-fn session)]
-    (swap! session assoc
-           ::mcp/id (new-session-id)
-           ::mcp/session-creation-time (System/currentTimeMillis)
-           ::mcp/send-mutex (Object.)
-           ::mcp/sse-next-event-id (AtomicLong. 0)
-           ::mcp/q (LinkedBlockingDeque. (int capacity))
-           ::mcp/replay-buffer (LinkedBlockingDeque. (int replay-cap))
-           ::mcp/post-streams #{}
-           ::mcp/send-to-client send-to-client)
+        session (atom (-> session-map
+                          (assoc ::mcp/id (new-session-id)
+                                 ::mcp/session-creation-time (System/currentTimeMillis)
+                                 ::mcp/q (LinkedBlockingDeque. (int capacity)))
+                          (dissoc ::mcp/sse-queue-capacity ::mcp/sse-replay-capacity)))]
     (add-watch session ::watcher handler/change-watcher)
-    session))
+    (sse/make-streamable-session session replay-cap)))
 
 ;; --- request body parsing --------------------------------------------------
 
@@ -190,47 +184,27 @@
   1. Flushes the response so the client sees `200 + text/event-stream`
      headers before any handler work begins.
   2. Registers the response OutputStream as a request-scoped POST-SSE
-     stream (::mcp/post-streams) and binds it to `sse/*post-stream*` for
-     the duration of the dispatch so that server-initiated messages
-     produced by synchronous handler code (and any code reachable through
-     it) route deterministically to this exact stream first, preserving
-     the spec's preference for related server messages on the originating
-     POST response. See the routing priority in `sse/send-to-client-fn`.
+     stream and binds it to `sse/*post-stream*` for the duration of the
+     dispatch so that server-initiated messages produced by synchronous
+     handler code route deterministically to this exact stream first.
   3. Invokes the supplied `dispatch` thunk (a zero-arg closure over
      `rpc/handle-parsed`). Three outcomes:
      - Non-future result: write + deregister + close inline.
      - CompletableFuture in sync Ring mode: block on `@result`, write
-       + deregister + close, then return. The sync adapter would close
-       the underlying HttpOutput on return anyway; HttpOutput.close is
-       idempotent so the explicit close here is harmless.
+       + deregister + close, then return.
      - CompletableFuture in async Ring mode: attach a `.thenApply`
        callback that writes + deregisters + closes the OutputStream,
-       and return immediately. The Ring async adapter wraps the
-       response OutputStream so that `.close()` triggers
-       `AsyncContext.complete()` — without that close the response
-       never finishes from the client's perspective and the connection
-       hangs. The Ring thread is freed while the handler completes
-       elsewhere.
-     Asynchronous handlers that produce notifications from background
-     threads must propagate the `*post-stream*` binding themselves via
-     `bound-fn` (see the `sse/*post-stream*` docstring) — the dynamic
-     binding established here only spans the synchronous portion of
-     `(dispatch)`.
-  4. Writes the JSON-RPC response (or nothing, when the dispatcher
-     produced no response — e.g. a cancelled request) as a single SSE
-     event and atomically deregisters the stream under
-     ::mcp/send-mutex via `sse/write-post-response-and-deregister`, so
-     no unrelated fallback message can splice in between the response
-     and EOF.
-  5. Closes the response OutputStream from the same `complete` callback
-     (or from the synchronous-dispatch-failure catch) so the HTTP
-     response actually finishes — in async mode that close is what
-     completes the underlying `AsyncContext`."
-  [session dispatch serde sync?]
+       and return immediately.
+  4. Writes the JSON-RPC response as a single SSE event and atomically
+     deregisters the stream under `send-mutex` via
+     `sse/write-post-response-and-deregister`.
+  5. Closes the response OutputStream so the HTTP response finishes —
+     in async mode that close completes the underlying `AsyncContext`."
+  [^StreamableSession ss dispatch serde sync?]
   (reify ring/StreamableResponseBody
     (write-body-to-stream [_ _ os]
       (.flush ^OutputStream os)
-      (sse/register-post-stream session os)
+      (sse/register-post-stream ss os)
       (let [close-stream (fn []
                            (try (.close ^OutputStream os)
                                 (catch Throwable e
@@ -239,17 +213,17 @@
           (let [complete (fn [resp]
                            (try
                              (sse/write-post-response-and-deregister
-                               session os (when resp (rpc/json-serialize serde resp)))
+                               ss os (when resp (rpc/json-serialize serde resp)))
                              (catch Throwable e
                                (log/error e "POST-SSE write failed")
-                               (sse/deregister-post-stream session os))
+                               (sse/deregister-post-stream ss os))
                              (finally
                                (close-stream))))
                 result (papply (binding [sse/*post-stream* os] (dispatch)) complete)]
             (cond-> result (and sync? (instance? CompletableFuture result)) deref))
           (catch Throwable e
             (log/error e "POST-SSE dispatch failed")
-            (sse/deregister-post-stream session os)
+            (sse/deregister-post-stream ss os)
             (close-stream)))))))
 
 (defn- handle-init-post
@@ -270,11 +244,12 @@
 
       (and (= :request (:item-type parsed))
            (= "initialize" (:method parsed)))
-      (let [session (create-session session-map)]
+      (let [ss (create-session session-map)
+            session (.session ss)]
         (papply (rpc/handle-parsed parsed (::mcp/dispatch-table session-map) session req)
                 (fn [r]
                   (if (and (map? r) (not (:error r)))
-                    (do (add-session sessions session)
+                    (do (add-session sessions ss)
                         (-> (json-resp 200 r serde)
                             (assoc-in [:headers "Mcp-Session-Id"] (::mcp/id @session))))
                     ;; Handler-level error: do not register the session and
@@ -294,24 +269,18 @@
   and client responses still return 202 with an empty body; parse and
   invalid-request errors still return 400 with a JSON error body.
 
-  Both branches invoke the same `dispatch` thunk (a closure over
-  `rpc/handle-parsed`); the SSE branch defers it until after the stream
-  is registered and `sse/*post-stream*` is bound, while the non-SSE
-  branch invokes it immediately and shapes the result via
-  `post-response`.
-
   `sync?` flows through to `post-sse-resp` so it can decide whether to
-  block on a CompletableFuture result (sync adapter, which closes the
-  OutputStream on return) or attach a callback and return immediately
-  (async adapter, which keeps the OutputStream alive)."
-  [req session sync?]
-  (let [{::mcp/keys [dispatch-table serde]} @session
+  block on a CompletableFuture result (sync adapter) or attach a callback
+  and return immediately (async adapter)."
+  [req ^StreamableSession ss sync?]
+  (let [session (.session ss)
+        {::mcp/keys [dispatch-table serde]} @session
         parsed (parse-body req serde)
         dispatch #(rpc/handle-parsed parsed dispatch-table session req)]
     (if (= :request (:item-type parsed))
       {:status 200
        :headers sse/streaming-headers
-       :body (post-sse-resp session dispatch serde sync?)}
+       :body (post-sse-resp ss dispatch serde sync?)}
       (papply (dispatch) post-response (:item-type parsed) serde))))
 
 (defn- parse-event-id
@@ -328,19 +297,19 @@
   carries server-originated requests and notifications. Honors a
   `Last-Event-ID` header by replaying buffered events with a higher
   event-id before live delivery resumes."
-  [req session sync?]
+  [req ^StreamableSession ss sync?]
   (.close (:body req))
   (let [last-event-id (parse-event-id (header req "last-event-id"))]
     {:status 200
      :headers sse/streaming-headers
-     :body (sse/get-resp session sync? last-event-id)}))
+     :body (sse/get-resp ss sync? last-event-id)}))
 
 (defn- handle-delete
-  "Terminates the named session: removes it from the store and detaches any
-  attached SSE stream so writers see ::mcp/os = nil and stop. Returns 200."
+  "Terminates the named session: removes it from the store and closes any
+  attached GET-SSE stream. Returns 200."
   [sessions session-id]
-  (when-let [session (delete-session sessions session-id)]
-    (some->> @session ::mcp/os (sse/close-os session)))
+  (when-let [^StreamableSession ss (delete-session sessions session-id)]
+    (sse/set-os! ss nil))
   (empty-resp 200))
 
 ;; --- routing ---------------------------------------------------------------
@@ -366,9 +335,9 @@
   (let [serde (::mcp/serde session-map)]
     (or (post-headers-error req serde)
         (if-let [session-id (header req "mcp-session-id")]
-          (if-let [session (get-session sessions session-id)]
+          (if-let [ss (get-session sessions session-id)]
             (if (protocol-version-ok? req)
-              (handle-session-post req session sync?)
+              (handle-session-post req ss sync?)
               (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
                           (str "Unsupported MCP-Protocol-Version: "
                                (header req "mcp-protocol-version"))
@@ -387,9 +356,9 @@
 
       :else
       (if-let [session-id (header req "mcp-session-id")]
-        (if-let [session (get-session sessions session-id)]
+        (if-let [ss (get-session sessions session-id)]
           (if (protocol-version-ok? req)
-            (handle-get req session sync?)
+            (handle-get req ss sync?)
             (error-resp 400 parse/INVALID_REQUEST "Invalid Request"
                         (str "Unsupported MCP-Protocol-Version: "
                              (header req "mcp-protocol-version"))

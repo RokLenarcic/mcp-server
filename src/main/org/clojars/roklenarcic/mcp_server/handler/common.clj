@@ -10,7 +10,7 @@
             [org.clojars.roklenarcic.mcp-server.handler.logging :as h.logging]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]])
-  (:import (java.io ByteArrayOutputStream IOException InputStream OutputStream)
+   (:import (java.io ByteArrayOutputStream InputStream OutputStream)
            (java.util Base64 UUID)
            (java.util.concurrent CompletableFuture ConcurrentHashMap)))
 
@@ -308,13 +308,7 @@
       (rpc/send-notification rpc-session "notifications/prompts/list_changed" nil))
     (when (and initialized? (not= (:resource-templates old-handlers) (:resource-templates new-handlers)))
       (log/debug "Resource templates changed, notifying client")
-      (rpc/send-notification rpc-session "notifications/resources/list_changed" nil))
-    (when (and (::mcp/os o) (not (identical? (::mcp/os o) (::mcp/os n))))
-      (log/debug "Output stream changed, closing old stream")
-      (try
-        (.close ^OutputStream (::mcp/os o))
-        (catch IOException e
-          (log/info e "Error closing old output stream"))))))
+      (rpc/send-notification rpc-session "notifications/resources/list_changed" nil))))
 
 (defn notify-progress
   [rpc-session progress-token msg]

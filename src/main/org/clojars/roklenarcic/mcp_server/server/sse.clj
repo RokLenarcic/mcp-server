@@ -2,18 +2,29 @@
   "Server-Sent Events streaming primitives for the MCP Streamable HTTP
   transport.
 
-  Each session has at most one active SSE stream (registered as ::mcp/os),
-  a bounded outbound queue (::mcp/q) of messages produced while no stream
-  was attached, and a bounded replay buffer (::mcp/replay-buffer) of events
-  whose write was either confirmed successful or attempted-but-unconfirmed
-  (the stream's OutputStream threw mid-batch or on flush). Both groups are
-  eligible for replay on reconnect via `Last-Event-ID`.
+  Each session has at most one active GET-SSE stream, a bounded outbound
+  queue (::mcp/q in the session atom) of messages produced while no stream
+  was attached, and a bounded replay buffer of events whose write was either
+  confirmed successful or attempted-but-unconfirmed. Both groups are eligible
+  for replay on reconnect via `Last-Event-ID`.
+
+  Transport state that does not need to survive a session freeze is kept on
+  the `StreamableSession` record rather than in the session atom:
+  - `send-mutex`        — serialises SSE writes
+  - `sse-next-event-id` — monotonic event id counter (AtomicLong)
+  - `replay-buffer`     — LinkedBlockingDeque for Last-Event-ID reconnects
+  - `os`                — atom holding the active GET-SSE OutputStream (or nil)
+  - `post-streams`      — atom holding the set of in-flight POST-response OSes
+
+  The session atom retains the user-visible, persistable state:
+  `::mcp/q` (pending outbound messages), `::mcp/id`, `::mcp/session-creation-time`,
+  `::mcp/timeout-ms`, and all core protocol keys.
 
   Connection model — single GET per session, plus request-scoped POST streams:
   - A session holds at most one GET-SSE stream at a time. When a new GET
-    /mcp arrives, `get-resp` overwrites ::mcp/os with the new stream; the
-    session's change-watcher detects the identity change and closes the
-    previous stream server-side. This is by design, not a limitation.
+    /mcp arrives, `get-resp` calls `set-os!` which atomically replaces the
+    registered stream and closes the previous one. This is by design, not
+    a limitation.
   - We deliberately do not maintain a list of live GET streams and fan out
     to all (clients would receive duplicates) or pick one (clients cannot
     predict which stream receives which message). Multiple concurrent
@@ -22,17 +33,16 @@
     and `Last-Event-ID`: when a write fails the stream is detached and the
     client's next GET resumes from where it left off, with attempted-but-
     unconfirmed events already in the replay buffer for the resumption.
-  - Each in-flight POST that returns SSE is registered in
-    ::mcp/post-streams for the duration of its handler dispatch and bound
-    (per thread) to the dynamic var `*post-stream*` so that
-    server-initiated messages produced inside the handler scope can be
-    routed deterministically back to the originating request's response
-    stream. Notifications produced by other concurrent POSTs or by code
-    without the binding fall through to the GET stream first and only
-    iterate over the registered POST streams as a fallback. POST streams
-    skip the replay buffer and never drain the outbound queue: they are
-    ephemeral, last only for the duration of the originating request, and
-    have no `Last-Event-ID` resumption semantics.
+  - Each in-flight POST that returns SSE is registered in the `post-streams`
+    atom for the duration of its handler dispatch and bound (per thread) to
+    the dynamic var `*post-stream*` so that server-initiated messages
+    produced inside the handler scope can be routed deterministically back
+    to the originating request's response stream. Notifications produced by
+    other concurrent POSTs or by code without the binding fall through to
+    the GET stream first and only iterate over the registered POST streams
+    as a fallback. POST streams skip the replay buffer and never drain the
+    outbound queue: they are ephemeral, last only for the duration of the
+    originating request, and have no `Last-Event-ID` resumption semantics.
 
   Routing priority in `send-to-client-fn`:
   1. `*post-stream*` — when bound, the OutputStream of the in-flight POST
@@ -40,16 +50,16 @@
      keeps a handler's notifications correlated with the response of the
      same client request, per the Streamable HTTP spec's preference for
      related server messages on the POST stream.
-  2. ::mcp/os — the active GET-SSE stream (live write through
-     `write-responses`, populates the replay buffer). Used when no
-     `*post-stream*` is bound (the typical case for an unrelated
-     server-initiated message) or when the bound stream's write failed.
-  3. ::mcp/post-streams — any other in-flight POST-response stream
-     (excluding `*post-stream*`, which we already attempted). Iterated
-     with `some` + `write-to-post-stream` so a stream that has just
-     failed self-deregisters and the next one is tried. Ephemeral write,
-     no replay buffer append, no queue drain.
-  4. ::mcp/q — the bounded outbound queue, drained on the next GET attach.
+  2. The active GET-SSE stream — written live through `write-responses`,
+     populates the replay buffer. Used when no `*post-stream*` is bound
+     (the typical case for an unrelated server-initiated message) or when
+     the bound stream's write failed.
+  3. Other in-flight POST-response streams (excluding `*post-stream*`,
+     which we already attempted). Iterated with `some` +
+     `write-to-post-stream` so a stream that has just failed
+     self-deregisters and the next one is tried. Ephemeral write, no
+     replay buffer append, no queue drain.
+  4. `::mcp/q` — the bounded outbound queue, drained on the next GET attach.
 
   Binding propagation: `*post-stream*` is set by the POST transport
   inside `write-body-to-stream`, so any synchronous code reached from the
@@ -63,7 +73,7 @@
   through to the GET stream / fallback iteration / queue.
 
   Every server-to-client SSE message is assigned a monotonic event id from
-  ::mcp/sse-next-event-id (an AtomicLong) and emitted as
+  `sse-next-event-id` (an AtomicLong on the record) and emitted as
 
       id: <event-id>
       data: <json>
@@ -90,14 +100,14 @@
 
   Concurrency:
   - Event id assignment and the choice between live-write and queueing are
-    performed under ::mcp/send-mutex so concurrent producers cannot
-    interleave or reorder events.
+    performed under `send-mutex` so concurrent producers cannot interleave
+    or reorder events.
   - The same mutex is held while a GET attaches its stream and replays /
     drains, so live producers see a consistent stream state.
   - POST stream registration, deregistration, and the POST response write
-    are also serialized under ::mcp/send-mutex so a server-initiated
-    fallback write cannot interleave with the response write that ends
-    (and deregisters) the stream.
+    are also serialized under `send-mutex` so a server-initiated fallback
+    write cannot interleave with the response write that ends (and
+    deregisters) the stream.
 
   Buffer eviction:
   - Enqueueing a new message at the tail drops the oldest entry (head)
@@ -138,6 +148,14 @@
   / fallback iteration / queue."
   nil)
 
+(defrecord StreamableSession
+  [session            ;; atom — core protocol state + id, creation-time, timeout-ms, q, send-to-client
+   send-mutex         ;; Object — serialises all SSE writes
+   sse-next-event-id  ;; AtomicLong — monotonic event id counter
+   replay-buffer      ;; LinkedBlockingDeque — replay buffer for Last-Event-ID reconnects
+   os                 ;; atom<OutputStream|nil> — the active GET-SSE stream
+   post-streams])     ;; atom<#{OutputStream}> — in-flight POST-response streams
+
 (defn cleanup-buffer
   "Drops events older than `expire-ms` from the head of the buffer.
 
@@ -167,29 +185,44 @@
     (.pollLast q)
     (.offerFirst q item)))
 
+(defn set-os!
+  "Registers `new-os` as the active GET-SSE stream on the StreamableSession,
+  closing the previous stream if one was attached and it differs from `new-os`.
+
+  Must be called under `send-mutex` so producers see a consistent stream state."
+  [^StreamableSession ss new-os]
+  (let [[old _] (reset-vals! (.os ss) new-os)]
+    (when (and old (not (identical? old new-os)))
+      (try (.close ^OutputStream old)
+           (catch IOException e
+             (log/debug e "Error closing old GET-SSE stream"))))))
+
 (defn close-os
-  "Detaches `os` from the session if it is still the registered stream."
-  [session os]
-  (swap! session update ::mcp/os #(if (= os %) nil %)))
+  "Detaches `os` from the StreamableSession's GET stream slot if it is
+  still the registered stream. Does not attempt to close the OutputStream —
+  this is called after a write failure when the stream is already broken."
+  [^StreamableSession ss os]
+  (swap! (.os ss) #(if (identical? os %) nil %)))
 
 (defn register-post-stream
-  "Adds `os` to the session's set of in-flight POST-response SSE streams.
+  "Adds `os` to the StreamableSession's set of in-flight POST-response SSE
+  streams.
 
   Called from the POST-response streaming body before its handler is
   dispatched so that server-initiated messages produced during dispatch
   fall back to this stream when no GET-SSE stream is attached (see the
   routing priority in the namespace docstring).
 
-  The set is mutated under ::mcp/send-mutex so the modification is
-  visible to a concurrent `send-to-client-fn` consistently with the
-  ::mcp/os check it performs in the same critical section."
-  [session os]
-  (locking (::mcp/send-mutex @session)
-    (swap! session update ::mcp/post-streams (fnil conj #{}) os)))
+  The set is mutated under `send-mutex` so the modification is visible
+  to a concurrent `send-to-client-fn` consistently with the GET stream
+  check it performs in the same critical section."
+  [^StreamableSession ss os]
+  (locking (.send-mutex ss)
+    (swap! (.post-streams ss) conj os)))
 
 (defn deregister-post-stream
-  "Removes `os` from the session's set of in-flight POST-response SSE
-  streams.
+  "Removes `os` from the StreamableSession's set of in-flight POST-response
+  SSE streams.
 
   This does NOT close the OutputStream — the Ring adapter owns the
   lifecycle of the POST response body and closes it after
@@ -199,9 +232,9 @@
   Idempotent: `disj` on a missing entry is a no-op, so it is safe to call
   this from a `finally` clause after `write-post-response-and-deregister`
   has already removed the stream as part of an atomic write+deregister."
-  [session os]
-  (locking (::mcp/send-mutex @session)
-    (swap! session update ::mcp/post-streams (fnil disj #{}) os)))
+  [^StreamableSession ss os]
+  (locking (.send-mutex ss)
+    (swap! (.post-streams ss) disj os)))
 
 (defn- write-event
   "Writes a single SSE frame to `os` as UTF-8 bytes in a single
@@ -241,9 +274,9 @@
   When the queue cannot fit a re-queued entry (bounded capacity), the
   newest entry at the tail is dropped to keep room for the older retried
   item."
-  [session ^OutputStream os ^LinkedBlockingDeque q record]
+  [^StreamableSession ss ^OutputStream os ^LinkedBlockingDeque q record]
   (let [batch (ArrayList.)
-        ^LinkedBlockingDeque replay (::mcp/replay-buffer @session)
+        ^LinkedBlockingDeque replay (.replay-buffer ss)
         attempted (volatile! 0)]
     (.drainTo q batch)
     (when record
@@ -261,7 +294,7 @@
         (run! #(offer-last-drop-oldest replay %) batch)
         (catch IOException e
           (log/debug e "SSE stream write or flush failed; closing")
-          (close-os session os)
+          (close-os ss os)
           (let [n @attempted
                 size (.size batch)
                 ambiguous (.subList batch 0 n)
@@ -282,9 +315,9 @@
 
   On IOException the stream is detached via `close-os`. The replay buffer
   is left intact so subsequent reconnects can attempt the same replay."
-  [session ^OutputStream os last-event-id]
-  (let [^LinkedBlockingDeque replay (::mcp/replay-buffer @session)]
-    (when (and replay last-event-id)
+  [^StreamableSession ss ^OutputStream os last-event-id]
+  (let [^LinkedBlockingDeque replay (.replay-buffer ss)]
+    (when last-event-id
       (let [events (->> (iterator-seq (.iterator replay))
                         (filter (fn [[eid _ _]] (> eid last-event-id))))]
         (when (seq events)
@@ -295,7 +328,7 @@
               (.flush os)
               (catch IOException e
                 (log/debug e "SSE replay write or flush failed; closing")
-                (close-os session os)))))))
+                (close-os ss os)))))))
     nil))
 
 (defn- write-to-post-stream
@@ -308,24 +341,24 @@
   GET attach. Only the supplied `record` is written.
 
   Returns true on success, false if the stream's write or flush threw
-  IOException — in which case the stream is removed from
-  ::mcp/post-streams so subsequent producers do not pick it again. Callers
-  should treat a false return as 'event not delivered' and queue the
-  record for the next attached stream."
-  [session ^OutputStream os record]
+  IOException — in which case the stream is removed from `post-streams`
+  so subsequent producers do not pick it again. Callers should treat a
+  false return as 'event not delivered' and queue the record for the
+  next attached stream."
+  [^StreamableSession ss ^OutputStream os record]
   (try
     (write-event os record)
     (.flush os)
     true
     (catch IOException e
       (log/debug e "POST-SSE fallback write or flush failed; deregistering")
-      (swap! session update ::mcp/post-streams (fnil disj #{}) os)
+      (swap! (.post-streams ss) disj os)
       false)))
 
 (defn write-post-response-and-deregister
   "Writes the JSON-RPC response for an in-flight POST as a single SSE
-  event on `os` and atomically removes `os` from ::mcp/post-streams, both
-  under ::mcp/send-mutex.
+  event on `os` and atomically removes `os` from `post-streams`, both
+  under `send-mutex`.
 
   Combining the two steps under a single mutex acquisition prevents a
   concurrent `send-to-client-fn` from routing one more fallback message
@@ -337,77 +370,68 @@
   is nil (the handler produced no response — e.g. a cancelled request),
   nothing is written but the stream is still deregistered.
 
-  POST events allocate an event id from ::mcp/sse-next-event-id (the
-  same counter used by GET-SSE writes, so ids never collide on the wire)
-  but are NOT appended to the replay buffer: the POST stream is
+  POST events allocate an event id from `sse-next-event-id` (the same
+  counter used by GET-SSE writes, so ids never collide on the wire) but
+  are NOT appended to the replay buffer: the POST stream is
   request-scoped and cannot be resumed via `Last-Event-ID`.
 
   On IOException the failure is logged and swallowed — the request is
   already past handler dispatch and there is no useful place to report a
   failed final write to."
-  [session ^OutputStream os msg]
-  (let [{::mcp/keys [^AtomicLong sse-next-event-id send-mutex]} @session]
-    (locking send-mutex
-      (when msg
-        (let [event-id (if sse-next-event-id (.incrementAndGet sse-next-event-id) 0)
-              record [event-id (System/currentTimeMillis) msg]]
-          (try
-            (write-event os record)
-            (.flush os)
-            (catch IOException e
-              (log/debug e "POST-SSE response write or flush failed")))))
-      (swap! session update ::mcp/post-streams (fnil disj #{}) os))))
+  [^StreamableSession ss ^OutputStream os msg]
+  (locking (.send-mutex ss)
+    (when msg
+      (let [event-id (.incrementAndGet ^AtomicLong (.sse-next-event-id ss))
+            record [event-id (System/currentTimeMillis) msg]]
+        (try
+          (write-event os record)
+          (.flush os)
+          (catch IOException e
+            (log/debug e "POST-SSE response write or flush failed")))))
+    (swap! (.post-streams ss) disj os)))
 
 (defn send-to-client-fn
   "Returns a function that sends `msg` to the client.
 
-  Under ::mcp/send-mutex the function allocates a monotonically increasing
-  event id from ::mcp/sse-next-event-id, builds an event record, and
-  routes it according to the priority chain documented in the namespace
+  Under `send-mutex` the function allocates a monotonically increasing
+  event id from `sse-next-event-id`, builds an event record, and routes
+  it according to the priority chain documented in the namespace
   docstring:
 
   1. `*post-stream*` (when bound) — the OutputStream of the in-flight
      POST currently dispatching on this thread. Written ephemerally via
      `write-to-post-stream`; on failure the stream self-deregisters and
      routing falls through to the next tier.
-  2. ::mcp/os (the active GET-SSE stream) — written live through
-     `write-responses`, which also drains the outbound queue and appends
-     to the replay buffer.
-  3. ::mcp/post-streams (the other in-flight POST-response streams,
-     excluding any already-attempted `*post-stream*`) — iterated with
-     `some` so a stream whose write fails self-deregisters and the next
-     one is tried. The outbound queue is NOT drained because POST
-     streams are request-scoped and should not absorb older queued
-     messages destined for the next GET.
-  4. ::mcp/q (the bounded outbound queue) — used when no stream
+  2. The active GET-SSE stream — written live through `write-responses`,
+     which also drains the outbound queue and appends to the replay
+     buffer.
+  3. Other in-flight POST-response streams (excluding any already-
+     attempted `*post-stream*`) — iterated with `some` so a stream whose
+     write fails self-deregisters and the next one is tried. The outbound
+     queue is NOT drained because POST streams are request-scoped and
+     should not absorb older queued messages destined for the next GET.
+  4. `::mcp/q` (the bounded outbound queue) — used when no stream
      successfully accepted the event; delivery happens on the next GET
      attach.
 
-  Holding the mutex guarantees that event ids and queue/stream order
+  Holding `send-mutex` guarantees that event ids and queue/stream order
   remain consistent across concurrent producers, across a concurrent GET
   that is attaching its stream, and across a concurrent POST stream
   registering or deregistering."
-  [session]
+  [^StreamableSession ss]
   (fn [msg]
     (when msg
-      (let [{::mcp/keys [^LinkedBlockingDeque q
-                         ^AtomicLong sse-next-event-id
-                         ^LinkedBlockingDeque replay-buffer
-                         send-mutex
-                         timeout-ms]} @session]
-        (locking send-mutex
+      (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(.session ss)]
+        (locking (.send-mutex ss)
           (when timeout-ms
-             (cleanup-buffer q timeout-ms)
-             (cleanup-buffer replay-buffer timeout-ms))
-           (let [event-id (if sse-next-event-id
-                           (.incrementAndGet sse-next-event-id)
-                           0)
+            (cleanup-buffer q timeout-ms)
+            (cleanup-buffer (.replay-buffer ss) timeout-ms))
+          (let [event-id (.incrementAndGet ^AtomicLong (.sse-next-event-id ss))
                 record [event-id (System/currentTimeMillis) msg]
-                snap @session
-                os (::mcp/os snap)
-                post-streams (::mcp/post-streams snap)
+                os @(.os ss)
+                post-streams @(.post-streams ss)
                 bound *post-stream*
-                bound-ok? (when bound (write-to-post-stream session bound record))]
+                bound-ok? (when bound (write-to-post-stream ss bound record))]
             (cond
               bound-ok?
               (log/trace "Routed to bound POST-SSE stream (originating request)")
@@ -415,57 +439,68 @@
               os
               (do
                 (log/trace "Active GET-SSE stream; writing immediately")
-                (write-responses session os q record))
+                (write-responses ss os q record))
 
               :else
               (let [other-posts (cond->> post-streams
                                   bound (remove #(identical? bound %)))]
-                (if (some #(write-to-post-stream session % record) other-posts)
+                (if (some #(write-to-post-stream ss % record) other-posts)
                   (log/trace "Routed to a fallback POST-SSE stream")
                   (do
                     (log/trace "No active SSE stream; queuing message")
                     (offer-last-drop-oldest q record)))))))))))
 
+(defn make-streamable-session
+  "Wraps an already-populated session atom in a `StreamableSession` record,
+  creating the transport-internal infrastructure (mutex, event-id counter,
+  replay buffer, stream slots) and wiring the `send-to-client` closure back
+  into the atom.
+
+  `session` must already contain the core protocol keys, `::mcp/id`,
+  `::mcp/session-creation-time`, `::mcp/q`, and `::mcp/timeout-ms`.
+  `replay-cap` is the capacity of the replay buffer."
+  [session replay-cap]
+  (let [ss (->StreamableSession
+             session
+             (Object.)
+             (AtomicLong. 0)
+             (LinkedBlockingDeque. (int replay-cap))
+             (atom nil)
+             (atom #{}))]
+    (swap! session assoc ::mcp/send-to-client (send-to-client-fn ss))
+    ss))
+
 (defn get-resp
   "Streamable response body for GET /mcp.
 
-  Registers the response output stream as the session's SSE channel,
-  optionally replays events whose event-id is greater than `last-event-id`
-  from the session's replay buffer, and immediately drains any queued
-  messages so the client receives them in order.
+  Registers the response output stream as the session's SSE channel via
+  `set-os!` (which closes any previously attached GET stream), optionally
+  replays events whose event-id is greater than `last-event-id` from the
+  replay buffer, and immediately drains any queued messages so the client
+  receives them in order.
 
-  Assigning ::mcp/os here unconditionally replaces any previously
-  registered stream: a session holds at most one GET-SSE stream by design
-  (see the namespace docstring for the rationale). The session's
-  change-watcher detects the identity change and closes the prior stream
-  server-side, so the old client connection observes EOF and the new GET
-  becomes the single live channel. Resilience across the swap comes from
-  the replay buffer plus `Last-Event-ID`, not from keeping the old
-  stream around.
+  `set-os!` is called inside `send-mutex` so concurrent producers see a
+  consistent stream state throughout the attach/replay/drain sequence.
 
   In synchronous Ring mode the stream is detached on return because the
   adapter will close it; in asynchronous mode the stream remains
-  registered until a write fails. The whole attach/replay/drain sequence
-  runs under ::mcp/send-mutex so concurrent producers cannot interleave
-  with the initial replay+drain."
-  [session sync? last-event-id]
+  registered until a write fails."
+  [^StreamableSession ss sync? last-event-id]
   (reify ring/StreamableResponseBody
     (write-body-to-stream [_ _ os]
       ;; Flush so the client sees the 200 + headers immediately.
       (.flush ^OutputStream os)
-      (locking (::mcp/send-mutex @session)
-        (swap! session assoc ::mcp/os os)
-        (let [{::mcp/keys [^LinkedBlockingDeque q
-                           ^LinkedBlockingDeque replay-buffer
-                           timeout-ms]} @session]
+      (locking (.send-mutex ss)
+        (set-os! ss os)
+        (let [{::mcp/keys [^LinkedBlockingDeque q timeout-ms]} @(.session ss)]
           (when timeout-ms
             (cleanup-buffer q timeout-ms)
-            (cleanup-buffer replay-buffer timeout-ms))
+            (cleanup-buffer (.replay-buffer ss) timeout-ms))
           (when last-event-id
-            (replay-events session os last-event-id))
+            (replay-events ss os last-event-id))
           ;; Only drain the pending queue if the replay write didn't
           ;; detach the stream.
-          (when (= os (::mcp/os @session))
-            (write-responses session os q nil)))
+          (when (identical? os @(.os ss))
+            (write-responses ss os q nil)))
         (when sync?
-          (close-os session os))))))
+          (close-os ss os))))))

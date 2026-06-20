@@ -591,11 +591,11 @@ the future still routes to the originating POST-SSE stream via the
           session-id (initialize-session)
           session (http/get-session (:sessions server-info) session-id)]
       (try
-        ;; Queue two notifications while no SSE stream is attached.
-        (rpc/send-notification session "notifications/message"
-                               {:level "info" :data "hello"})
-        (rpc/send-notification session "notifications/message"
-                               {:level "info" :data "world"})
+         ;; Queue two notifications while no SSE stream is attached.
+         (rpc/send-notification (.session session) "notifications/message"
+                                {:level "info" :data "hello"})
+         (rpc/send-notification (.session session) "notifications/message"
+                                {:level "info" :data "world"})
         (let [response (get-request base-url {"Mcp-Session-Id" session-id})
               messages (parse-sse-body (:body response))]
           (is (= 200 (:status response)))
@@ -618,7 +618,7 @@ the future still routes to the originating POST-SSE stream via the
           session-id (initialize-session)
           session (http/get-session (:sessions server-info) session-id)]
       (try
-        (let [fut (rpc/send-request session "sampling/createMessage"
+         (let [fut (rpc/send-request (.session session) "sampling/createMessage"
                                     {:question "hi"} (fn [_]))
               get-response (get-request base-url {"Mcp-Session-Id" session-id})
               messages (parse-sse-body (:body get-response))
@@ -650,7 +650,7 @@ the future still routes to the originating POST-SSE stream via the
           session-b-id (initialize-session)
           session-a (http/get-session (:sessions server-info) session-a-id)]
       (try
-        (let [fut-a (rpc/send-request session-a "sampling/createMessage"
+         (let [fut-a (rpc/send-request (.session session-a) "sampling/createMessage"
                                       {:question "a"} (fn [_]))
               get-a (get-request base-url {"Mcp-Session-Id" session-a-id})
               messages-a (parse-sse-body (:body get-a))
@@ -685,10 +685,10 @@ the future still routes to the originating POST-SSE stream via the
           session-id (initialize-session)
           session (http/get-session (:sessions server-info) session-id)]
       (try
-        ;; Queue three notifications before any SSE stream is attached.
-        (rpc/send-notification session "notifications/message" {:level "info" :data "a"})
-        (rpc/send-notification session "notifications/message" {:level "info" :data "b"})
-        (rpc/send-notification session "notifications/message" {:level "info" :data "c"})
+         ;; Queue three notifications before any SSE stream is attached.
+         (rpc/send-notification (.session session) "notifications/message" {:level "info" :data "a"})
+         (rpc/send-notification (.session session) "notifications/message" {:level "info" :data "b"})
+         (rpc/send-notification (.session session) "notifications/message" {:level "info" :data "c"})
         (let [first-resp (get-request base-url {"Mcp-Session-Id" session-id})
               first-events (parse-sse-events (:body first-resp))]
           (is (= 200 (:status first-resp)))
@@ -696,7 +696,7 @@ the future still routes to the originating POST-SSE stream via the
           (is (= [1 2 3] (mapv :event-id first-events)))
           ;; In sync Ring mode the previous GET detaches its stream on
           ;; return, so the next notification is queued.
-          (rpc/send-notification session "notifications/message" {:level "info" :data "d"})
+           (rpc/send-notification (.session session) "notifications/message" {:level "info" :data "d"})
           (let [second-resp (get-request base-url {"Mcp-Session-Id" session-id
                                                    "Last-Event-ID" "2"})
                 second-events (parse-sse-events (:body second-resp))]
@@ -920,17 +920,17 @@ the future still routes to the originating POST-SSE stream via the
           session (http/get-session (:sessions server-info) session-id)
           os (java.io.ByteArrayOutputStream.)]
       (try
-        ;; Pretend an SSE stream is attached.
-        (swap! session assoc ::mcp/os os)
-        (is (some? (::mcp/os @session)))
+         ;; Pretend an SSE stream is attached.
+         (reset! (.os session) os)
+         (is (some? @(.os session)))
 
         (let [response (delete-request base-url {"Mcp-Session-Id" session-id})]
           (is (= 200 (:status response))))
 
-        (is (nil? (http/get-session (:sessions server-info) session-id))
-            "Session removed from store")
-        (is (nil? (::mcp/os @session))
-            "Attached SSE stream is detached on DELETE")
+         (is (nil? (http/get-session (:sessions server-info) session-id))
+             "Session removed from store")
+         (is (nil? @(.os session))
+             "Attached SSE stream is detached on DELETE")
         (finally
           (stop-test-server server-info))))))
 
