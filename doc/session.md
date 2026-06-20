@@ -57,30 +57,55 @@ Your handlers can access these dependencies through the exchange object:
 
 ## Stream Transport Session Access
 
-Stream transport uses only one session per server instance. If you need to access the session outside of handlers, you'll need to manually manage the session creation:
+Stream transport uses only one session per server instance. Because
+`streams/run` mutates the atom you pass in, you already hold a reference to
+the live session — there is no separate "get session" step.
 
-### Standard Approach (No External Access)
+### Standard Approach
 
 ```clojure
 (server/start-server-on-streams session-template System/in System/out {})
 ```
 
-### Manual Approach (With External Access)
+If you only need per-request access to the session, use the `exchange` object
+inside your handlers — no need to hold a reference externally.
+
+### Holding the Atom for Ongoing Control
+
+Because `streams/run` operates on the atom you supply, retaining that atom
+gives you full ongoing control over the running session — add or remove tools,
+update resources, inspect state — at any time while `run` is blocking:
 
 ```clojure
 (require '[org.clojars.roklenarcic.mcp-server.server.streams :as streams])
 
-(let [session (streams/create-session session-template System/out)]
-  ;; Save session for later use
-  (reset! my-session-atom session)
-  ;; Start the server
-  (streams/run session System/in {}))
+(def my-session (atom @session-template))
+
+;; Start the server in a separate thread; my-session is the live session.
+(future (streams/run my-session System/in System/out {}))
+
+;; Later, from any thread:
+(server/add-tool my-session new-tool)
+(server/remove-tool my-session "old-tool")
 ```
 
-This approach gives you direct access to the live session, allowing you to:
-- Add or remove tools dynamically
-- Monitor session state
-- Implement custom session management logic
+If you want to preserve `session-template` unchanged for future connections,
+pass a fresh copy: `(atom @session-template)`.
+
+### HTTP Transport — Accessing Live Sessions
+
+For the HTTP transport, every connected client has its own session atom.
+The `Sessions` protocol (returned as `:sessions` from `http/ring-handler`)
+provides access to all of them:
+
+```clojure
+(require '[org.clojars.roklenarcic.mcp-server.server.http :as http])
+
+(let [{:keys [handler sessions]} (http/ring-handler session-template opts)]
+  ;; Broadcast a notification to every connected client:
+  (doseq [ss (http/all-sessions sessions)]
+    (server/add-tool (:session ss) new-tool)))
+```
 
 
 ## Root Changes
@@ -125,16 +150,24 @@ This isolation enables:
 
 ## Example: User-Specific Tool Loading
 
+For the streams transport, create a fresh copy of the template per connection,
+add user-specific tools before starting, then hold the atom for ongoing access:
+
 ```clojure
-(defn create-user-session [template-session user-id]
-  (let [live-session (streams/create-session template-session output-stream)
+(defn start-user-session [template-session user-id input-stream output-stream]
+  (let [session (atom @template-session)
         user-tools (load-user-tools user-id)]
-    ;; Add user-specific tools
+    ;; Customise before the connection starts.
     (doseq [tool user-tools]
-      (server/add-tool live-session tool))
-    ;; Add user context
-    (swap! live-session assoc :user-id user-id)
-    live-session))
+      (server/add-tool session tool))
+    (swap! session assoc :user-id user-id)
+    ;; Blocks until EOF/interrupt; session atom remains live throughout.
+    (future (streams/run session input-stream output-stream {}))
+    session))
 ```
 
-This pattern allows you to create personalized MCP servers for different users while sharing common infrastructure.
+For the HTTP transport, customise sessions from within the `initialize` handler
+using the exchange object, or iterate `http/all-sessions` externally.
+
+This pattern allows you to create personalised MCP servers for different users
+while sharing common infrastructure.

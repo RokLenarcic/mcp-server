@@ -5,7 +5,7 @@
             [deps-deploy.deps-deploy :as deps-deploy]))
 
 (def lib 'org.clojars.roklenarcic/mcp-server)
-(def version (format "0.2.%s" (b/git-count-revs nil)))
+(def version (format "0.3.%s" (b/git-count-revs nil)))
 
 (defn create-opts [cli-opts aliases]
       (let [target (:target cli-opts "target")
@@ -38,6 +38,13 @@
 
 (defn ci "Run the CI pipeline of tests (and build the JAR)." [opts]
       (test opts)
+      (-> (create-opts opts [])
+          (clean)
+          (doto (b/write-pom)
+                (copy-sources))
+          (b/jar)))
+
+(defn jar "Build the JAR without running tests." [opts]
       (-> (create-opts opts [])
           (clean)
           (doto (b/write-pom)
