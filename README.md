@@ -28,6 +28,7 @@ org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.40"}
 - [Prompts](#prompts)
 - [Resources](#resources)
 - [Resource Templates](#resource-templates)
+- [Pagination](#pagination)
 - [Completions](#completions)
 - [Titles and Metadata](#titles-and-metadata)
 - [Client Communication](#client-communication)
@@ -64,7 +65,6 @@ The complexity didn't match the value. If you want to build a simple STDIO MCP s
 
 These features are not yet implemented:
 
-- Pagination support
 - Tool parameter schema validation
 
 The API may change before the stable release.
@@ -582,6 +582,18 @@ arguments (MCP 2025-06-18):
                               :title "General File"
                               :_meta {"com.example/category" "filesystem"})
 ```
+
+## Pagination
+
+The `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list` operations support cursor-based pagination. Pagination is **opt-in** and disabled by default.
+
+To enable it, set `::mcp/page-size` in the session (template or live):
+
+```clojure
+(swap! session assoc ::mcp/page-size 50)
+```
+
+When `::mcp/page-size` is set, list responses include a `:nextCursor` field whenever more items follow. Pass that value as the `cursor` parameter in the next request. Items are returned sorted alphabetically by name (or URI for resources). A stale or unknown cursor silently returns the first page.
 
 ## Completions
 
