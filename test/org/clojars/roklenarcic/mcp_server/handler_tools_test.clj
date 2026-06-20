@@ -62,6 +62,20 @@
                             :outputSchema out-schema}]}
                   (tools/tools-list session {} {}))))))
 
+(deftest tools-list-pagination-test
+  (testing "tools sorted and paginated when ::mcp/page-size is set"
+    (let [session (atom {::mcp/page-size 1})
+          slim  (fn [r] (update r :tools #(mapv (fn [t] (select-keys t [:name :description])) %)))]
+      (server/add-tool session (server/tool "charlie" "C" (server/obj-schema nil {} []) (fn [_ _] nil)))
+      (server/add-tool session (server/tool "alpha"   "A" (server/obj-schema nil {} []) (fn [_ _] nil)))
+      (server/add-tool session (server/tool "bravo"   "B" (server/obj-schema nil {} []) (fn [_ _] nil)))
+      (let [p1 (slim (tools/tools-list session {} {}))
+            p2 (slim (tools/tools-list session {} {:cursor (:nextCursor p1)}))
+            p3 (slim (tools/tools-list session {} {:cursor (:nextCursor p2)}))]
+        (is (= {:tools [{:name "alpha" :description "A"}] :nextCursor "alpha"} p1))
+        (is (= {:tools [{:name "bravo" :description "B"}] :nextCursor "bravo"} p2))
+        (is (= {:tools [{:name "charlie" :description "C"}]} p3))))))
+
 (deftest tools-call-test
   (testing "Call existing tool successfully"
     (let [session (atom {})]

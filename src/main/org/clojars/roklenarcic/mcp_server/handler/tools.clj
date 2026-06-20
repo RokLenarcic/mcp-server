@@ -7,7 +7,8 @@
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.util :refer [papply ?assoc]]
-            [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]])
+            [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
+            [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (defn map->tool-message
@@ -44,19 +45,24 @@
         {:content (common/->content-vector resp)
          :isError false})))
 
-(defn tools-list 
+(defn tools-list
   "Handles tools/list requests from the client.
-   
+
    Parameters:
    - rpc-session: the session atom
-   - _: unused parameters
-   
-   Returns a map with :tools key containing the list of available tools."
-  [rpc-session req-meta _]
+   - cursor: optional pagination cursor from params
+
+   Returns a map with :tools key containing the (possibly paginated) list of
+   available tools. :nextCursor is included only when more pages remain."
+  [rpc-session req-meta {:keys [cursor]}]
   (log/debug "Client requested tool list")
-  (let [tools (or (-> @rpc-session ::mcp/handlers :tools vals) [])]
-    (log/trace "Returning" (count tools) "tools:" (mapv :name tools))
-    {:tools (mapv #(dissoc % :handler) tools)}))
+  (let [page-size (::mcp/page-size @rpc-session)
+        tools (sort-by :name (or (-> @rpc-session ::mcp/handlers :tools vals) []))
+        {:keys [items nextCursor]} (pagination/paginate
+                                     (mapv #(dissoc % :handler) tools)
+                                     :name cursor page-size)]
+    (log/trace "Returning" (count items) "tools")
+    (?assoc {:tools items} :nextCursor nextCursor)))
 
 (defn tools-call 
   "Handles tools/call requests from the client.
