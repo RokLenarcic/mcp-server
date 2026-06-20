@@ -8,7 +8,7 @@ The library is currently in alpha stage with features being added incrementally.
 
 ```clojure
 ;; deps.edn
-org.clojars.roklenarcic/mcp-server {:mvn/version "0.2.14"}
+org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.40"}
 ```
 
 ## Table of Contents
