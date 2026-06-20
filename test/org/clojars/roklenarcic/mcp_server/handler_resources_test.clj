@@ -42,6 +42,31 @@
                            :uri "file:///test.txt"}]}
              (resources/resources-list session {} {:cursor "page-2"}))))))
 
+(deftest resources-list-pagination-test
+  (testing "resources sorted by URI and paginated when ::mcp/page-size is set"
+    (let [resource-map (lookup/lookup-map false)
+          session (atom {::mcp/page-size 1 ::mcp/handlers {:resources resource-map}})]
+      (lookup/add-resource session (c/resource-desc "file:///c.txt" "C" "C" "text/plain" nil) (constantly nil))
+      (lookup/add-resource session (c/resource-desc "file:///a.txt" "A" "A" "text/plain" nil) (constantly nil))
+      (lookup/add-resource session (c/resource-desc "file:///b.txt" "B" "B" "text/plain" nil) (constantly nil))
+      (let [p1 (resources/resources-list session {} {})
+            p2 (resources/resources-list session {} {:cursor (:nextCursor p1)})
+            p3 (resources/resources-list session {} {:cursor (:nextCursor p2)})]
+        (is (= "file:///a.txt" (-> p1 :resources first :uri)))
+        (is (= "file:///a.txt" (:nextCursor p1)))
+        (is (= "file:///b.txt" (-> p2 :resources first :uri)))
+        (is (= "file:///b.txt" (:nextCursor p2)))
+        (is (= "file:///c.txt" (-> p3 :resources first :uri)))
+        (is (nil? (:nextCursor p3))))))
+
+  (testing "stale cursor returns first page"
+    (let [resource-map (lookup/lookup-map false)
+          session (atom {::mcp/page-size 1 ::mcp/handlers {:resources resource-map}})]
+      (lookup/add-resource session (c/resource-desc "file:///a.txt" "A" "A" "text/plain" nil) (constantly nil))
+      (lookup/add-resource session (c/resource-desc "file:///b.txt" "B" "B" "text/plain" nil) (constantly nil))
+      (let [result (resources/resources-list session {} {:cursor "file:///zzz-unknown.txt"})]
+        (is (= "file:///a.txt" (-> result :resources first :uri)))))))
+
 (deftest resources-read-test
   (testing "Read resource with valid resource object"
     (let [resource-obj {:uri "file:///test.txt"

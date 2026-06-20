@@ -10,6 +10,7 @@
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
             [org.clojars.roklenarcic.mcp-server.handler.resources :as h.res]
+            [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination]
             [org.clojars.roklenarcic.mcp-server.resources :as res]
             [org.clojars.roklenarcic.mcp-server.util :as util]))
 
@@ -18,8 +19,13 @@
   (supports-list-changed? [this] true)
   (supports-subscriptions? [this] support-subscriptions?)
   (list-resources [this exchange cursor]
-    (let [resources (::mcp/resource-list @(c/get-session exchange))]
-      {:nextCursor nil :resources (mapv #(util/camelcase-keys (dissoc % :handler)) (vals resources))}))
+    (let [session-val @(c/get-session exchange)
+          page-size   (::mcp/page-size session-val)
+          resources   (sort-by :uri
+                        (mapv #(util/camelcase-keys (dissoc % :handler))
+                              (vals (::mcp/resource-list session-val))))
+          {:keys [items nextCursor]} (pagination/paginate resources :uri cursor page-size)]
+      {:nextCursor nextCursor :resources items}))
   (get-resource [this exchange uri]
     (get-in @(c/get-session exchange) [::mcp/resource-list uri]))
   (subscribe [this exchange uri]
