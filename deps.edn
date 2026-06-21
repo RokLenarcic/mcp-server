@@ -11,9 +11,12 @@
                                org.babashka/json {:mvn/version "0.1.6"}
                                clj-http/clj-http {:mvn/version "3.13.1"}
                                camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
-                               org.clojure/test.check {:mvn/version "1.1.1"}
-                               io.github.cognitect-labs/test-runner
-                               {:git/tag "v0.5.1" :git/sha "dfb30dd6"}}
+                                org.clojure/test.check {:mvn/version "1.1.1"}
+                                com.networknt/json-schema-validator {:mvn/version "1.5.1"}
+                                com.github.erosb/json-sKema {:mvn/version "0.18.0"}
+                                dev.harrel/json-schema {:mvn/version "1.5.0"}
+                                io.github.cognitect-labs/test-runner
+                                {:git/tag "v0.5.1" :git/sha "dfb30dd6"}}
                   :extra-paths ["src/dev" "test"]
                   :exec-args {}}
            :build {:ns-default build

@@ -4,6 +4,7 @@
             [org.clojars.roklenarcic.mcp-server.server :as server]
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
+            [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [matcher-combinators.test]
             [matcher-combinators.matchers :as m]))
 
@@ -65,10 +66,10 @@
 (deftest tools-list-pagination-test
   (testing "tools sorted and paginated when ::mcp/page-size is set"
     (let [session (atom {::mcp/page-size 1})
-          slim  (fn [r] (update r :tools #(mapv (fn [t] (select-keys t [:name :description])) %)))]
+          slim (fn [r] (update r :tools #(mapv (fn [t] (select-keys t [:name :description])) %)))]
       (server/add-tool session (server/tool "charlie" "C" (server/obj-schema nil {} []) (fn [_ _] nil)))
-      (server/add-tool session (server/tool "alpha"   "A" (server/obj-schema nil {} []) (fn [_ _] nil)))
-      (server/add-tool session (server/tool "bravo"   "B" (server/obj-schema nil {} []) (fn [_ _] nil)))
+      (server/add-tool session (server/tool "alpha" "A" (server/obj-schema nil {} []) (fn [_ _] nil)))
+      (server/add-tool session (server/tool "bravo" "B" (server/obj-schema nil {} []) (fn [_ _] nil)))
       (let [p1 (slim (tools/tools-list session {} {}))
             p2 (slim (tools/tools-list session {} {:cursor (:nextCursor p1)}))
             p3 (slim (tools/tools-list session {} {:cursor (:nextCursor p2)}))]
@@ -164,3 +165,99 @@
               :_meta {:com.example/trace-id "abc-123"
                       :other-key "v"}}
              (tools/tools-call session {} {:name "meta-tool" :arguments {}}))))))
+
+(defn- mock-validator
+  "Returns a SchemaValidator that returns the given errors seq on every call,
+  or nil (valid) when errors is nil/empty.  Also records the last json-impl,
+  schema and data it received in the supplied atoms."
+  [errors & {:keys [json-impl-atom schema-atom data-atom]}]
+  (reify p/SchemaValidator
+    (-validate [_ json-impl schema data]
+      (when json-impl-atom (reset! json-impl-atom json-impl))
+      (when schema-atom (reset! schema-atom schema))
+      (when data-atom (reset! data-atom data))
+      (seq errors))))
+
+(deftest tools-call-schema-validation-test
+  (testing "No validator set → tool is called without validation"
+    (let [session (atom {})
+          called? (atom false)]
+      (server/add-tool session (server/tool "t" "desc"
+                                            (server/obj-schema "s" {:x (server/num-schema "x")} ["x"])
+                                            (fn [_ _] (reset! called? true) "ok")))
+      (tools/tools-call session {} {:name "t" :arguments {:x 1}})
+      (is (true? @called?))))
+
+  (testing "Validator returns nil (valid) → tool handler is invoked"
+    (let [session (atom {::mcp/serde :test-serde})
+          called? (atom false)
+          json-impl-got (atom nil)
+          schema-got (atom nil)
+          data-got (atom nil)
+          validator (mock-validator nil
+                                    :json-impl-atom json-impl-got
+                                    :schema-atom schema-got
+                                    :data-atom data-got)]
+      (server/add-tool session (server/tool "t" "desc"
+                                            (server/obj-schema "s" {:x (server/num-schema "x")} ["x"])
+                                            (fn [_ _] (reset! called? true) "ok")))
+      (server/set-params-validator session validator)
+      (tools/tools-call session {} {:name "t" :arguments {:x 42}})
+      (is (true? @called?))
+      (is (= :test-serde @json-impl-got) "validator received the session's json-impl")
+      (is (contains? (:properties @schema-got) :x) "validator received the tool's inputSchema")
+      (is (= {:x 42} @data-got) "validator received arguments")))
+
+  (testing "Validator returns errors → invalid-params returned, handler not called"
+    (let [session (atom {})
+          called? (atom false)
+          validator (mock-validator ["x must be a number" "x is required"])]
+      (server/add-tool session (server/tool "t" "desc"
+                                            (server/obj-schema "s" {:x (server/num-schema "x")} ["x"])
+                                            (fn [_ _] (reset! called? true) "ok")))
+      (server/set-params-validator session validator)
+      (is (match? {:code -32602
+                   :data "Schema validation failed: x must be a number; x is required"}
+                  (tools/tools-call session {} {:name "t" :arguments {}})))
+      (is (false? @called?))))
+
+  (testing "Tool with no :inputSchema is not validated even when validator is set"
+    (let [session (atom {})
+          called? (atom false)
+          validator (mock-validator ["should not see this"])]
+      ;; Manually register a tool without an :inputSchema key
+      (swap! session assoc-in [::mcp/handlers :tools "bare"]
+             {:name "bare" :handler (fn [_ _] (reset! called? true) "ok")})
+      (server/set-params-validator session validator)
+      (tools/tools-call session {} {:name "bare" :arguments {}})
+      (is (true? @called?))))
+
+  (testing "set-params-validator with nil removes the validator"
+    (let [session (atom {})
+          validator (mock-validator ["oops"])]
+      (server/add-tool session (server/tool "t" "desc"
+                                            (server/obj-schema "s" {:x (server/num-schema "x")} ["x"])
+                                            (fn [_ _] "ok")))
+      (server/set-params-validator session validator)
+      ;; First call with validator in place should fail validation
+      (is (match? {:code -32602} (tools/tools-call session {} {:name "t" :arguments {}})))
+      ;; Remove the validator
+      (server/set-params-validator session nil)
+      ;; Now the call should succeed (handler returns "ok" → text content)
+      (is (match? {:isError false} (tools/tools-call session {} {:name "t" :arguments {:x 1}}))))))
+
+(deftest tools-call-schema-validation-exception-test
+  (testing "Validator that throws returns invalid-params, handler not called"
+    (let [session (atom {})
+          called? (atom false)
+          exploding (reify p/SchemaValidator
+                      (-validate [_ _ _ _]
+                        (throw (ex-info "boom" {:reason :test}))))]
+      (server/add-tool session (server/tool "t" "desc"
+                                            (server/obj-schema "s" {:x (server/num-schema "x")} ["x"])
+                                            (fn [_ _] (reset! called? true) "ok")))
+      (server/set-params-validator session exploding)
+      (is (match? {:code -32602
+                   :data "Schema validation failed: Schema validation error: boom"}
+                  (tools/tools-call session {} {:name "t" :arguments {:x 1}})))
+      (is (false? @called?)))))

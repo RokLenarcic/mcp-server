@@ -9,8 +9,8 @@
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
             [org.clojars.roklenarcic.mcp-server.resources :as res]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
-             [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination]
-             [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]])
+            [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination]
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
 
 (defn resources'

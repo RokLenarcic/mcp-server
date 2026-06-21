@@ -287,6 +287,33 @@
   (swap! session assoc ::mcp/page-size page-size)
   session)
 
+(defn set-params-validator
+  "Enables tool parameter schema validation against each tool's :inputSchema.
+
+   When set, every tools/call request is validated before the tool handler is
+   invoked. If the arguments do not conform to the schema, an invalid-params
+   JSON-RPC error is returned immediately and the handler is never called.
+
+   Parameters:
+   - session:   the session atom
+   - validator: a SchemaValidator instance (from one of the schema/* adapter
+                namespaces), or nil to disable validation
+
+   Returns the session atom.
+
+   Example:
+     (require '[org.clojars.roklenarcic.mcp-server.schema.networknt :as nnt])
+     (-> session
+         (server/set-page-size 50)
+         (server/set-params-validator (nnt/validator)))"
+  [session validator]
+  (if validator
+    (do (log/info "Setting tool params validator")
+        (swap! session assoc ::mcp/params-validator validator))
+    (do (log/info "Unsetting tool params validator")
+        (swap! session dissoc ::mcp/params-validator)))
+  session)
+
 (defn start-server-on-streams
   "Starts the MCP server using the provided input and output streams.
    

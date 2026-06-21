@@ -29,6 +29,7 @@ org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.40"}
 - [Resources](#resources)
 - [Resource Templates](#resource-templates)
 - [Pagination](#pagination)
+- [Tool Parameter Validation](#tool-parameter-validation)
 - [Completions](#completions)
 - [Titles and Metadata](#titles-and-metadata)
 - [Client Communication](#client-communication)
@@ -64,8 +65,6 @@ The complexity didn't match the value. If you want to build a simple STDIO MCP s
 ## Current Alpha Limitations
 
 These features are not yet implemented:
-
-- Tool parameter schema validation
 
 The API may change before the stable release.
 
@@ -596,6 +595,100 @@ To enable it, set a page size on the session using `server/set-page-size`:
 ```
 
 When `::mcp/page-size` is set, list responses include a `:nextCursor` field whenever more items follow. Pass that value as the `cursor` parameter in the next request. Items are returned sorted alphabetically by name (or URI for resources). A stale or unknown cursor silently returns the first page.
+
+## Tool Parameter Validation
+
+The library can validate tool arguments against each tool's `:inputSchema` before the handler is invoked. Validation is **opt-in** and disabled by default.
+
+The schema is the third argument to `server/tool` (see [Tool Schemas](#tool-schemas)). No special configuration is needed on the tool itself — the same schema that is advertised to clients via `tools/list` is also used for server-side validation.
+
+You bring your own JSON Schema validator. Three adapters are provided out of the box (one per supported Java library). All adapters receive the session's `JSONSerialization` instance at validation time and use it to serialise the schema and arguments to JSON strings — no separate JSON configuration required.
+
+### Using networknt/json-schema-validator (recommended)
+
+```clojure
+;; deps.edn
+{com.networknt/json-schema-validator {:mvn/version "1.5.1"}}
+```
+
+```clojure
+(require '[org.clojars.roklenarcic.mcp-server.schema.networknt :as nnt])
+
+(-> (server/make-session ...)
+    (server/set-params-validator (nnt/validator))        ; Draft-07 by default
+    (server/set-params-validator (nnt/validator {:draft :draft-2020-12}))  ; or specify draft
+    (server/add-tool my-tool))
+```
+
+`nnt/validator` options:
+
+| Option | Default | Description |
+|---|---|---|
+| `:draft` | `:draft-07` | Schema draft. Supported: `:draft-04` `:draft-06` `:draft-07` `:draft-2019-09` `:draft-2020-12`. |
+
+### Using json-sKema
+
+```clojure
+;; deps.edn
+{com.github.erosb/json-sKema {:mvn/version "0.18.0"}}
+```
+
+```clojure
+(require '[org.clojars.roklenarcic.mcp-server.schema.json-skema :as skema])
+
+(-> (server/make-session ...)
+    (server/set-params-validator (skema/validator))
+    (server/add-tool my-tool))
+```
+
+### Using harrel/json-schema
+
+```clojure
+;; deps.edn
+{dev.harrel/json-schema {:mvn/version "1.5.0"}}
+```
+
+```clojure
+(require '[org.clojars.roklenarcic.mcp-server.schema.harrel :as harrel])
+
+(-> (server/make-session ...)
+    (server/set-params-validator (harrel/validator))
+    (server/add-tool my-tool))
+```
+
+### How validation works
+
+When a `tools/call` request arrives:
+
+1. If no validator is set, the tool handler is called immediately (no change in behaviour).
+2. If a validator is set and the tool has an `:inputSchema`, the arguments are validated against the schema.
+3. If validation **passes** (validator returns `nil`), the tool handler is invoked as normal.
+4. If validation **fails**, an `invalid-params` JSON-RPC error is returned to the client and the handler is **never called**. The error message lists all validation errors joined by `"; "`.
+
+Tools that have no `:inputSchema` are never validated even when a validator is configured.
+
+To remove the validator at runtime, pass `nil`:
+
+```clojure
+(server/set-params-validator session nil)
+```
+
+### Custom validators
+
+Any object satisfying the `SchemaValidator` protocol works. The `json-impl` parameter is the session's `JSONSerialization` instance — use it to serialise to JSON strings if needed, or inspect the Clojure data directly:
+
+```clojure
+(require '[org.clojars.roklenarcic.mcp-server.protocol :as p])
+
+(def my-validator
+  (reify p/SchemaValidator
+    (-validate [_ json-impl schema data]
+      ;; return nil if valid, or a seq of error strings if invalid
+      (when-not (contains? data :required-field)
+        ["required-field is missing"]))))
+
+(server/set-params-validator session my-validator)
+```
 
 ## Completions
 

@@ -295,7 +295,7 @@
   `Last-Event-ID` header by replaying buffered events with a higher
   event-id before live delivery resumes."
   [req ^StreamableSession ss sync?]
-  (.close (:body req))
+  (.close ^java.io.Closeable (:body req))
   (let [last-event-id (parse-event-id (header req "last-event-id"))]
     {:status 200
      :headers sse/streaming-headers

@@ -2,7 +2,8 @@
   "This namespace handles tool-related MCP protocol operations.
   Tools are functions that clients can call with structured parameters.
   This handler manages tool registration, listing, and execution."
-  (:require [clojure.tools.logging :as log]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
@@ -59,31 +60,48 @@
   (let [page-size (::mcp/page-size @rpc-session)
         tools (sort-by :name (or (-> @rpc-session ::mcp/handlers :tools vals) []))
         {:keys [items nextCursor]} (pagination/paginate
-                                     (mapv #(dissoc % :handler) tools)
-                                     :name cursor page-size)]
+                                    (mapv #(dissoc % :handler) tools)
+                                    :name cursor page-size)]
     (log/trace "Returning" (count items) "tools")
     (?assoc {:tools items} :nextCursor nextCursor)))
 
-(defn tools-call 
+(defn tools-call
   "Handles tools/call requests from the client.
    
    Parameters:
    - rpc-session: the session atom
    - params: request parameters containing :name (tool name) and :arguments (tool arguments)
    
-   Returns the result of tool execution, or an error if the tool is not found."
+   If a SchemaValidator is configured on the session (via set-params-validator) and
+   the tool has an :inputSchema, arguments are validated before the handler is called.
+   Invalid arguments produce an invalid-params error; the handler is never invoked.
+   
+   Returns the result of tool execution, or an error if the tool is not found
+   or if argument validation fails."
   [rpc-session req-meta {:keys [name arguments] :as params}]
   (log/debug "Client requested tool execution - name:" name)
   (log/trace "Tool arguments:" arguments)
-  
-  (if-let [tool-handler (get-in @rpc-session [::mcp/handlers :tools name :handler])]
-    (do (log/trace "Found tool handler, executing tool:" name)
-        (-> (tool-handler (common/create-req-session rpc-session req-meta params) arguments)
-            (papply map->tool-message)))
-    (do
-      (log/warn "Tool not found:" name)
-      (log/trace "Available tools:" (keys (get-in @rpc-session [::mcp/handlers :tools])))
-      (c/invalid-params (format "Tool %s not found" name)))))
+
+  (let [session @rpc-session]
+    (if-let [tool (get-in session [::mcp/handlers :tools name])]
+      (let [validator (::mcp/params-validator session)
+            schema (:inputSchema tool)
+            errors (when (and validator schema)
+                     (try
+                       (p/-validate validator (::mcp/serde session) schema (or arguments {}))
+                       (catch Exception e
+                         (log/warn e "Schema validator threw an exception for tool:" name)
+                         [(str "Schema validation error: " (ex-message e))])))]
+        (if errors
+          (do (log/debug "Tool argument validation failed:" name errors)
+              (c/invalid-params (str "Schema validation failed: " (str/join "; " errors))))
+          (do (log/trace "Found tool handler, executing tool:" name)
+              (-> ((:handler tool) (common/create-req-session rpc-session req-meta params) arguments)
+                  (papply map->tool-message)))))
+      (do
+        (log/warn "Tool not found:" name)
+        (log/trace "Available tools:" (keys (get-in session [::mcp/handlers :tools])))
+        (c/invalid-params (format "Tool %s not found" name))))))
 
 (defn add-tool-handlers [m]
   (assoc m "tools/list" (wrap-check-init tools-list) "tools/call" (wrap-check-init tools-call)))

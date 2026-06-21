@@ -37,8 +37,9 @@
                      (assoc-in params [:_meta :progressToken] token))
                  params)
         cancel-handler #(rpc/send-notification rpc-session "notifications/cancelled" {:requestId %})]
-    (cond-> (rpc/send-request rpc-session method params cancel-handler)
-      token (.whenComplete (fn [_ _] (.remove client-progress token))))))
+    (let [^CompletableFuture fut (rpc/send-request rpc-session method params cancel-handler)]
+      (cond-> fut
+        token (.whenComplete (fn [_ _] (.remove client-progress token)))))))
 
 (declare create-req-session)
 

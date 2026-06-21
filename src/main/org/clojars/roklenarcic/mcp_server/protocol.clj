@@ -75,3 +75,28 @@
    collection of them) directly. Created via core/resource-read-result."
   (-read-contents [this] "Returns the contents (one ResourceResponse or a collection of them).")
   (-read-meta [this] "Returns the :_meta map to attach to the read-resource result envelope."))
+
+(defprotocol SchemaValidator
+  "Protocol for validating tool arguments against a JSON Schema.
+
+   Implementations live in the schema/* adapter namespaces (one per
+   external JSON Schema library).  The user brings whichever library
+   dependency they prefer and requires the matching adapter.
+
+   See:
+     org.clojars.roklenarcic.mcp-server.schema.networknt
+     org.clojars.roklenarcic.mcp-server.schema.json-skema
+     org.clojars.roklenarcic.mcp-server.schema.harrel"
+  (-validate [this json-impl schema data]
+    "Validates data against schema.
+
+     Parameters:
+     - json-impl: the session's JSONSerialization instance. Adapters that need
+                  a JSON string can call (rpc/json-serialize json-impl x).
+                  Adapters that can work directly on the Clojure data may
+                  ignore this parameter.
+     - schema: the JSON Schema as a Clojure map (the tool's :inputSchema)
+     - data:   the tool arguments map to validate
+
+     Returns nil if valid, or a non-empty seq of human-readable error strings
+     if invalid."))
