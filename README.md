@@ -8,7 +8,7 @@ The library is currently in alpha stage with features being added incrementally.
 
 ```clojure
 ;; deps.edn
-org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.40"}
+org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.50"}
 ```
 
 ## Table of Contents
@@ -33,8 +33,8 @@ org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.40"}
 - [Completions](#completions)
 - [Titles and Metadata](#titles-and-metadata)
 - [Client Communication](#client-communication)
-  - [Elicitation](#elicitation)
-  - [Request Metadata](#request-metadata)
+- [Elicitation](#elicitation)
+- [Request Metadata](#request-metadata)
 - [Logging](#logging)
 - [Middleware](#middleware)
 - [Errors](#errors)
@@ -61,12 +61,6 @@ I initially tried wrapping the official Java MCP server from https://github.com/
 The complexity didn't match the value. If you want to build a simple STDIO MCP server with basic tools, why should you need to bundle a web server and deal with reactive flows?
 
 </details>
-
-## Current Alpha Limitations
-
-These features are not yet implemented:
-
-The API may change before the stable release.
 
 ## Quick Start
 
