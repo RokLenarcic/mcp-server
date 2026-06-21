@@ -69,7 +69,8 @@
         ^BufferedReader stdout (io/reader out)]
     (future (try (streams/run session is os2 {})
                  (catch Exception e
-                   (log/error e))))
+                   (log/error e))
+                 (finally (.close os2))))
     {:server session
      :stdin stdin
      :stdout stdout}))

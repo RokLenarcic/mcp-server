@@ -20,8 +20,9 @@
             [org.clojars.roklenarcic.mcp-server.json-rpc :as rpc]
             [org.clojars.roklenarcic.mcp-server.handler.common :as handler]
             [org.clojars.roklenarcic.mcp-server.util :refer [papply pcatch]])
-  (:import (java.io BufferedReader InputStream OutputStream)
-           (java.nio.channels ClosedByInterruptException)))
+   (:import (java.io BufferedReader InputStream OutputStream)
+            (java.nio.channels ClosedByInterruptException)
+            (java.util.concurrent CompletableFuture Phaser)))
 
 (defn process
   "Processes a single JSON-RPC message string.
@@ -42,25 +43,6 @@
     (catch Exception e
       (log/error e "Error during message processing")
       (rpc/make-response (c/internal-error nil (ex-message e)) nil))))
-
-(defn- await-in-flight
-  "Blocks until there are no in-flight requests on the session.
-
-   The current thread's interrupt flag is cleared before sleeping so this
-   helper can run after a `ClosedByInterruptException` (which leaves the
-   flag set). A subsequent interrupt during the wait aborts the wait and
-   abandons any remaining in-flight requests."
-  [session]
-  (Thread/interrupted) ;; clear interrupt flag if set
-  (try
-    (while (seq (::mcp/in-flight @session))
-      (Thread/sleep 400)
-      (log/infof "Awaiting %d outstanding requests %s"
-                 (count (::mcp/in-flight @session))
-                 (::mcp/in-flight @session)))
-    (catch InterruptedException _
-      (log/infof "Interrupted during shutdown wait; abandoning %d in-flight requests"
-                 (count (::mcp/in-flight @session))))))
 
 (defn run
   "Runs the MCP server using the provided streams for reading and writing
@@ -96,7 +78,15 @@
                               (.write (int \newline))
                               (.flush))))
         ^BufferedReader r (io/reader is)
-        timeout-ms (or client-req-timeout-ms 120000)]
+        timeout-ms (or client-req-timeout-ms 120000)
+        ;; Drain gate: the phaser starts with 1 party — the sentinel for the run
+        ;; loop itself. Each async write future adds a party via .register before
+        ;; it is submitted, and removes it via .arriveAndDeregister in its
+        ;; .whenComplete callback (fired on both success and error, so it never
+        ;; throws). Phase 0 cannot advance until every registered party has
+        ;; arrived, which means the sentinel party prevents premature completion
+        ;; even if all in-flight write futures finish before the loop exits.
+        ^Phaser phaser (Phaser. 1)]
     (swap! session-atom assoc ::mcp/send-to-client write-string-fn)
     (add-watch session-atom ::watcher handler/change-watcher)
     (log/debug "Starting MCP server main loop with timeout:" timeout-ms "ms")
@@ -104,12 +94,19 @@
       (loop []
         (if-let [msg (.readLine r)]
           (do (rpc/cleanup-requests timeout-ms)
-              (papply (process session-atom msg)
-                      (fn [response]
-                        (when response
-                          (let [json-response (rpc/json-serialize (::mcp/serde @session-atom) response)]
-                            (log/trace "Sending response of length:" (count json-response))
-                            ((::mcp/send-to-client @session-atom) json-response)))))
+              (let [write-fut (papply (process session-atom msg)
+                                     (fn [response]
+                                       (when response
+                                         (let [json-response (rpc/json-serialize (::mcp/serde @session-atom) response)]
+                                           (log/trace "Sending response of length:" (count json-response))
+                                           ((::mcp/send-to-client @session-atom) json-response)))))]
+                (when (instance? CompletableFuture write-fut)
+                  ;; Register before attaching the callback so the party count
+                  ;; is incremented before the future can complete and decrement it.
+                  (.register phaser)
+                  (.whenComplete write-fut
+                                 (reify java.util.function.BiConsumer
+                                   (accept [_ _ _] (.arriveAndDeregister phaser))))))
               (recur))
           (log/info "EOF reached, stopping server")))
       (catch InterruptedException _
@@ -118,4 +115,8 @@
         (log/info "Stream server interrupted (channel closed), stopping..."))
       (finally
         (remove-watch session-atom ::watcher)
-        (await-in-flight session-atom)))))
+        ;; Release the sentinel party. If all write futures have already
+        ;; completed this causes the phaser to terminate; otherwise
+        ;; awaitAdvance blocks until the last write future deregisters.
+        (.arriveAndDeregister phaser)
+        (.awaitAdvance phaser 0)))))
