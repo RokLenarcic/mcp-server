@@ -587,10 +587,12 @@ arguments (MCP 2025-06-18):
 
 The `tools/list`, `prompts/list`, `resources/list`, and `resources/templates/list` operations support cursor-based pagination. Pagination is **opt-in** and disabled by default.
 
-To enable it, set `::mcp/page-size` in the session (template or live):
+To enable it, set a page size on the session using `server/set-page-size`:
 
 ```clojure
-(swap! session assoc ::mcp/page-size 50)
+(-> (server/make-session ...)
+    (server/set-page-size 50)
+    (server/add-tool my-tool))
 ```
 
 When `::mcp/page-size` is set, list responses include a `:nextCursor` field whenever more items follow. Pass that value as the `cursor` parameter in the next request. Items are returned sorted alphabetically by name (or URI for resources). A stale or unknown cursor silently returns the first page.

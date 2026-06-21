@@ -262,9 +262,30 @@
    - dispatch is RPC dispatch table, use make-dispatch to make your own"
   ([server-info json-serialization context]
    (make-session server-info json-serialization context nil))
-  ([server-info json-serialization context dispatch]
-   (-> (rpc/base-session context server-info json-serialization (or dispatch (make-dispatch)))
-       (atom))))
+   ([server-info json-serialization context dispatch]
+    (-> (rpc/base-session context server-info json-serialization (or dispatch (make-dispatch)))
+        (atom))))
+
+(defn set-page-size
+  "Enables cursor-based pagination for list operations (tools/list, prompts/list,
+   resources/list, resources/templates/list).
+
+   When page-size is nil (the default), pagination is disabled and all items are
+   returned. When set to a positive integer, list responses include a :nextCursor
+   field whenever more items follow the current page.
+
+   Parameters:
+   - session:    the session atom
+   - page-size:  positive integer, or nil to disable pagination
+
+   Returns the session atom."
+  [session page-size]
+  (when (some? page-size)
+    (when-not (and (integer? page-size) (pos? page-size))
+      (throw (ex-info "page-size must be a positive integer or nil"
+                      {:page-size page-size}))))
+  (swap! session assoc ::mcp/page-size page-size)
+  session)
 
 (defn start-server-on-streams
   "Starts the MCP server using the provided input and output streams.

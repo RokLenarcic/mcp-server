@@ -19,15 +19,17 @@
   [items sort-key cursor page-size]
   (if (nil? page-size)
     {:items (vec items) :nextCursor nil}
-    (let [items-vec (vec items)
-          start (if cursor
-                  (let [idx (some (fn [[i item]]
-                                    (when (= cursor (get item sort-key)) i))
-                                  (map-indexed vector items-vec))]
-                    (if idx (inc idx) 0))
-                  0)
-          n (count items-vec)
-          page (subvec items-vec start (min (+ start page-size) n))
-          next-cursor (when (< (+ start page-size) n)
-                        (get (last page) sort-key))]
-      {:items page :nextCursor next-cursor})))
+    (let [items (if cursor
+                   (or (next (drop-while #(not= (get % sort-key) cursor) items))
+                       items)
+                   items)]
+      (if (seq items)
+        (loop [ret []
+               i 1
+               [x & more] items]
+            (if (>= i page-size)
+              {:items (conj ret x) :nextCursor (when more (get x sort-key))}
+            (if more
+              (recur (conj ret x) (inc i) more)
+              {:items (conj ret x) :nextCursor nil})))
+        {:items [] :nextCursor nil}))))
