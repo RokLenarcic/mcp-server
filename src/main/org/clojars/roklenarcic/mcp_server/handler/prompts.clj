@@ -6,7 +6,7 @@
             [org.clojars.roklenarcic.mcp-server.core :as c]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.protocol :as p]
-            [org.clojars.roklenarcic.mcp-server.util :refer [papply camelcase-keys ?assoc]]
+            [org.clojars.roklenarcic.mcp-server.util :refer [papply ?assoc]]
             [org.clojars.roklenarcic.mcp-server.handler.common :as common :refer [wrap-check-init]]
             [org.clojars.roklenarcic.mcp-server.handler.pagination :as pagination])
   (:import (org.clojars.roklenarcic.mcp_server.core JSONRPCError)))
@@ -23,8 +23,7 @@
                       []
                       optional-args)]
     (-> (dissoc all :required-args :optional-args)
-        (assoc :arguments (into ra oa))
-        (camelcase-keys))))
+        (assoc :arguments (into ra oa)))))
 
 (defn ->messages
   "Extracts messages from a prompt response.

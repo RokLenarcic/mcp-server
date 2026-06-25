@@ -1,7 +1,7 @@
 (ns org.clojars.roklenarcic.mcp-server.handler.init
   (:require [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.core :as c]
-            [org.clojars.roklenarcic.mcp-server.util :refer [?assoc camelcase-keys]]
+            [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]]
             [org.clojars.roklenarcic.mcp-server.resources :as resources]))
 
 (def server-protocol-version "2025-11-25")
@@ -34,8 +34,8 @@
                      :serverInfo (?assoc {:name (:name server-info) :version (:version server-info)}
                                          :title (:title server-info)
                                          :description (:description server-info)
-                                         :icons (some-> (:icons server-info) camelcase-keys)
-                                         :websiteUrl (:website-url server-info))
+                                         :icons (:icons server-info)
+                                         :websiteUrl (:websiteUrl server-info))
                      :capabilities (->capabilities server-info handlers)}
                     :instructions (:instructions server-info))))
       (c/invalid-request (format "Invalid protocol version %s, supported version %s" protocolVersion allowed-protocol-versions)))))

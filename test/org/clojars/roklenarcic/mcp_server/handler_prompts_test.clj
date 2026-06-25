@@ -269,12 +269,12 @@
               :name "test-prompt"}
              processed))))
 
-  (testing "Prompt preprocessing with camelCase conversion"
+  (testing "Prompt preprocessing preserves keys as-is"
     (let [raw-prompt {:name "test"
                       :description "test"
                       :required-args {}
                       :optional-args {}
                       :some-kebab-key "value"}
           processed (#'prompts/->prompt raw-prompt)]
-      ;; The camelcase-keys function should convert kebab-case to camelCase
-      (is (contains? processed :someKebabKey)))))
+      ;; Keys are preserved without camelCase transformation
+      (is (contains? processed :some-kebab-key)))))

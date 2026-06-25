@@ -12,7 +12,7 @@
             [org.clojars.roklenarcic.mcp-server.handler.prompts :as h.prompts]
             [org.clojars.roklenarcic.mcp-server.handler.resources :as h.resources]
             [org.clojars.roklenarcic.mcp-server.handler.tools :as h.tools]
-            [org.clojars.roklenarcic.mcp-server.util :as util :refer [map-of ?assoc camelcase-keys]])
+            [org.clojars.roklenarcic.mcp-server.util :as util :refer [map-of ?assoc]])
   (:import (java.util.concurrent Executors)))
 
 (def mcp-functions
@@ -39,7 +39,7 @@
    Returns the session atom."
   [session tool-spec]
   (log/info "Adding tool:" (:name tool-spec))
-  (swap! session update-in [::mcp/handlers :tools] assoc (:name tool-spec) (camelcase-keys tool-spec))
+  (swap! session update-in [::mcp/handlers :tools] assoc (:name tool-spec) tool-spec)
   session)
 
 (defn remove-tool
@@ -392,7 +392,7 @@
      :mime-type, :sizes (vector of strings), and :theme (\"light\" or \"dark\")
    - :website-url - URL of the server's website"
   [info & {:keys [title description icons website-url]}]
-  (?assoc info :title title :description description :icons icons :website-url website-url))
+  (?assoc info :title title :description description :icons icons :websiteUrl website-url))
 
 (defn icon
   "Creates an icon specification (MCP 2025-11-25) for use with tools, prompts,
@@ -407,7 +407,7 @@
    - :sizes - vector of size strings (e.g., [\"48x48\"], [\"any\"] for SVG)
    - :theme - theme preference (\"light\" or \"dark\")"
   [src & {:keys [mime-type sizes theme]}]
-  (?assoc {:src src} :mime-type mime-type :sizes sizes :theme theme))
+  (?assoc {:src src} :mimeType mime-type :sizes sizes :theme theme))
 
 (defn prompt
   "Creates a Prompt spec. Required args and optional args are maps of arg_name -> arg_description.
@@ -574,8 +574,8 @@
    - additionalProperties: Control extra properties
    - patternProperties: Properties matching patterns"
   [name description input-schema handler & {:keys [title output-schema _meta icons]}]
-  (?assoc (map-of name description input-schema handler)
+  (?assoc {:name name :description description :inputSchema input-schema :handler handler}
           :title title
-          :output-schema output-schema
+          :outputSchema output-schema
           :_meta _meta
           :icons icons))
