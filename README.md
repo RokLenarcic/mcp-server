@@ -966,6 +966,11 @@ This project uses `clojure.tools.logging` for internal logging.
 ## Middleware
 
 Dispatch table of JSON-RPC handlers can be modified using a middleware pattern, similar to Ring middleware.
+Dispatch handlers and middleware-wrapped handlers are called with three arguments:
+
+- `rpc-session`: the session atom
+- `req-meta`: request-specific metadata
+- `params`: parsed JSON-RPC method params
 
 ```clojure
 (rpc/with-middleware dispatch-table [[middleware1]
@@ -988,9 +993,9 @@ Here's an example middleware:
 (defn wrap-check-credentials
   "Checks credentials"
   [handler]
-  (fn check-credentials [rpc-session params]
+  (fn check-credentials [rpc-session req-meta params]
     (if (:user-id @rpc-session)
-      (handler rpc-session params)
+      (handler rpc-session req-meta params)
       (c/invalid-params "Wrong access."))))
 ```
 
@@ -1017,12 +1022,16 @@ MCP specification mandates use of OAuth2 authentication when used with HTTP tran
 and uses the token to validate access. This process is very specific to each application so this library
 provides no tools for working with these tokens.
 
-The easiest way you can integrate your Authentication solution with this library is via the request meta.
+The easiest way you can integrate your Authentication solution with this library is via request metadata.
 
 This library provides a Ring handler. You can wrap handler with middleware to block all unauthorized requests to it.
 
-Within your handlers the request meta that `RequestExchange` object provides is the request map itself, and 
-you can add your own Authentication logic to your handlers. 
+For HTTP transports, `req-meta` starts as the Ring request map, so transport-level authentication middleware can attach
+application-specific data to that map before JSON-RPC dispatch. For stream transports, `req-meta` starts as `nil`.
+
+The JSON-RPC layer also adds namespaced metadata to `req-meta`, such as `::mcp/request-id` when a request id is present.
+When a `RequestExchange` is created for a tool, prompt, resource, or completion handler, request `params._meta` is exposed
+as `::mcp/request-_meta` and can be read with `core/request-_meta`.
 
 ## License
 

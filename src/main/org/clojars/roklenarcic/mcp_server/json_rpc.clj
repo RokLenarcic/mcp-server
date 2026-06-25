@@ -236,8 +236,8 @@
    Parameters:
    - parsed: parsed message object
    - dispatch-table: function dispatch table
-   - context: request context
-   - req-context: request specific context
+   - context: handler context, typically the session atom
+   - req-meta: request-specific metadata passed to dispatch handlers
    
    Returns a JSON-RPC response object or CompletableFuture."
   [parsed dispatch-table context req-meta]
