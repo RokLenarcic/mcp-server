@@ -8,13 +8,14 @@ The library is currently in alpha stage with features being added incrementally.
 
 ```clojure
 ;; deps.edn
-org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.50"}
+org.clojars.roklenarcic/mcp-server {:mvn/version "0.3.54"}
 ```
 
 ## Table of Contents
 
 - [Why Use This Library?](#why-use-this-library)
 - [Current Alpha Limitations](#current-alpha-limitations)
+- [Protocol Version Support](#protocol-version-support)
 - [Quick Start](#quick-start)
 - [Alternative: Manual Configuration](#alternative-manual-configuration)
 - [Streamable HTTP Transport](#streamable-http-transport)
@@ -61,6 +62,33 @@ I initially tried wrapping the official Java MCP server from https://github.com/
 The complexity didn't match the value. If you want to build a simple STDIO MCP server with basic tools, why should you need to bundle a web server and deal with reactive flows?
 
 </details>
+
+
+## Protocol Version Support
+
+The server advertises protocol version **2025-11-25** and accepts clients using either:
+
+| Version | Status |
+|---------|--------|
+| `2025-11-25` | Fully supported (advertised) |
+| `2025-06-18` | Accepted for backwards compatibility |
+
+Clients requesting any other version will receive an `Invalid Request` error.
+
+Features supported from the **2025-11-25** specification:
+
+- Extended implementation metadata (title, description, icons, websiteUrl on serverInfo)
+- Icons on tools, prompts, resources, and resource templates
+- URL-mode elicitation (`elicitation/create` with `mode: "url"`)
+- `notifications/elicitation/complete` notification
+- Audio content type
+
+The following features from the **2025-11-25** specification are **not yet implemented**:
+
+- **Tasks** — The task state machine for long-running operations (`tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`, task-augmented requests) is not supported. This includes the `execution.taskSupport` field on tool definitions.
+- **Authorization** — The OAuth-based authorization framework for HTTP transports is not built-in. You can implement your own auth middleware around the Ring handler.
+- **URLElicitationRequiredError** — The `-32042` error code that signals a URL-mode elicitation is required before a request can be processed is not emitted automatically. Handlers can return it manually via `core/->JSONRPCError`.
+- **JSON Schema dialect enforcement** — The spec requires validating schemas according to their declared `$schema` dialect and rejecting unsupported dialects. The library passes schemas through as-is without dialect-level validation.
 
 ## Quick Start
 
@@ -157,7 +185,7 @@ The dispatch table is a lookup map that routes JSON-RPC calls to their handlers.
 
 ## Streamable HTTP Transport
 
-For HTTP-based communication, use `ring-handler` from the HTTP transport namespace. This implements the MCP 2025-06-18 Streamable HTTP transport on a single endpoint that handles three methods: `POST` for client to server JSON-RPC, `GET` for a server to client SSE stream, and `DELETE` to terminate a session. The result is a standard Ring handler that you can mount in any Ring-compatible HTTP server:
+For HTTP-based communication, use `ring-handler` from the HTTP transport namespace. This implements the MCP Streamable HTTP transport on a single endpoint that handles three methods: `POST` for client to server JSON-RPC, `GET` for a server to client SSE stream, and `DELETE` to terminate a session. The result is a standard Ring handler that you can mount in any Ring-compatible HTTP server:
 
 ```clojure
 (ns example.http-server
