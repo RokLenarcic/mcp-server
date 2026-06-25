@@ -369,6 +369,8 @@
                           (sampling [this req progress-callback] nil)
                           (elicitation [this message json-schema] nil)
                           (elicitation [this message json-schema progress-callback] nil)
+                          (elicitation-url [this message url elicitation-id] nil)
+                          (elicitation-url [this message url elicitation-id progress-callback] nil)
                           (report-progress [this msg]
                             (swap! progress-calls conj msg))
                           (req-cancelled-future [this] (CompletableFuture/completedFuture nil)))]
@@ -409,6 +411,8 @@
                           (sampling [this req progress-callback] nil)
                           (elicitation [this message json-schema] nil)
                           (elicitation [this message json-schema progress-callback] nil)
+                          (elicitation-url [this message url elicitation-id] nil)
+                          (elicitation-url [this message url elicitation-id progress-callback] nil)
                           (report-progress [this msg] false)
                           (req-cancelled-future [this] @cancelled-future))]
 

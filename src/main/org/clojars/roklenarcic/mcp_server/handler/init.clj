@@ -1,12 +1,12 @@
 (ns org.clojars.roklenarcic.mcp-server.handler.init
   (:require [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.core :as c]
-            [org.clojars.roklenarcic.mcp-server.util :refer [?assoc]]
+            [org.clojars.roklenarcic.mcp-server.util :refer [?assoc camelcase-keys]]
             [org.clojars.roklenarcic.mcp-server.resources :as resources]))
 
-(def server-protocol-version "2025-06-18")
+(def server-protocol-version "2025-11-25")
 
-(def allowed-protocol-versions #{"2025-06-18"})
+(def allowed-protocol-versions #{"2025-06-18" "2025-11-25"})
 
 (defn ->capabilities [server-info handlers]
   (cond-> {}
@@ -19,7 +19,7 @@
                                          {:subscribe (resources/supports-subscriptions? (:resources handlers)),
                                           :listChanged (resources/supports-list-changed? (:resources handlers))})))
 
-(defn initialize-handler [rpc-session req-meta {:keys [protocolVersion capabilities clientInfo]}]
+(defn initialize-handler [rpc-session _req-meta {:keys [protocolVersion capabilities clientInfo]}]
   (let [{::mcp/keys [server-info handlers] :as sess} @rpc-session]
     (if (allowed-protocol-versions protocolVersion)
       (if (some? (::mcp/initialized? sess))
@@ -31,12 +31,16 @@
                    ::mcp/client-info clientInfo
                    ::mcp/protocol-version protocolVersion)
             (?assoc {:protocolVersion protocolVersion
-                     :serverInfo {:name (:name server-info) :version (:version server-info)}
+                     :serverInfo (?assoc {:name (:name server-info) :version (:version server-info)}
+                                         :title (:title server-info)
+                                         :description (:description server-info)
+                                         :icons (some-> (:icons server-info) camelcase-keys)
+                                         :websiteUrl (:website-url server-info))
                      :capabilities (->capabilities server-info handlers)}
                     :instructions (:instructions server-info))))
       (c/invalid-request (format "Invalid protocol version %s, supported version %s" protocolVersion allowed-protocol-versions)))))
 
-(defn init-notify-handler [rpc-session req-meta _]
+(defn init-notify-handler [rpc-session _ _]
   (swap! rpc-session update ::mcp/initialized? #(if (false? %) true %))
   nil)
 

@@ -115,13 +115,17 @@
      under :_meta are preserved verbatim on the wire (no kebab→camelCase
      transformation).
 
+   Optional keyword arguments (MCP 2025-11-25):
+   - :icons - vector of icon maps for display in user interfaces. Each map
+     has :src (required), and optionally :mime-type, :sizes, :theme.
+
    Returns the session atom."
   ([session uri-template name description mime-type]
    (add-resource-template session uri-template name description mime-type nil))
-  ([session uri-template name description mime-type annotations & {:keys [title _meta]}]
+  ([session uri-template name description mime-type annotations & {:keys [title _meta icons]}]
    (log/info "Adding resource template:" name "for URI template:" uri-template)
    (let [spec (-> (map-of uri-template name description mime-type annotations)
-                  (?assoc :title title :_meta _meta))]
+                  (?assoc :title title :_meta _meta :icons icons))]
      (swap! session update-in
             [::mcp/handlers :resource-templates]
             (fn [templates] (conj (or templates []) (h.resources/->resource-template spec)))))
@@ -339,6 +343,19 @@
   [session uri] 
   (h.resources/notify-changed session uri))
 
+(defn notify-elicitation-complete
+  "Sends notifications/elicitation/complete to the client (MCP 2025-11-25).
+
+   Call this when an out-of-band URL-mode elicitation interaction completes on the
+   server side, to inform the client that it may retry the original request.
+
+   Parameters:
+   - session: the session atom
+   - elicitation-id: the elicitationId from the original elicitation/create request"
+  [session elicitation-id]
+  (rpc/send-notification session "notifications/elicitation/complete"
+                         {:elicitationId elicitation-id}))
+
 (defn exchange
   "Converts a session atom to a RequestExchange object."
   ([session] (exchange session nil))
@@ -362,6 +379,36 @@
   ([name version instructions logging]
    (map-of name version logging instructions)))
 
+(defn server-info-ext
+  "Extends a server-info map with optional MCP 2025-11-25 implementation metadata.
+
+   Parameters:
+   - info: server-info map created with the server-info function
+
+   Optional keyword arguments (MCP 2025-11-25):
+   - :title - human-readable display name for the server/client implementation
+   - :description - description of the server
+   - :icons - vector of icon maps, each with :src (required), and optionally
+     :mime-type, :sizes (vector of strings), and :theme (\"light\" or \"dark\")
+   - :website-url - URL of the server's website"
+  [info & {:keys [title description icons website-url]}]
+  (?assoc info :title title :description description :icons icons :website-url website-url))
+
+(defn icon
+  "Creates an icon specification (MCP 2025-11-25) for use with tools, prompts,
+   resources, resource templates, and server-info-ext.
+
+   Parameters:
+   - src: URI pointing to the icon resource (required). Can be an HTTPS URL
+     or a data URI with base64-encoded image data.
+
+   Optional keyword arguments:
+   - :mime-type - MIME type of the icon (e.g., \"image/png\", \"image/svg+xml\")
+   - :sizes - vector of size strings (e.g., [\"48x48\"], [\"any\"] for SVG)
+   - :theme - theme preference (\"light\" or \"dark\")"
+  [src & {:keys [mime-type sizes theme]}]
+  (?assoc {:src src} :mime-type mime-type :sizes sizes :theme theme))
+
 (defn prompt
   "Creates a Prompt spec. Required args and optional args are maps of arg_name -> arg_description.
 
@@ -372,10 +419,14 @@
      when present
    - :_meta - map of arbitrary metadata to attach to this prompt. Keys
      under :_meta are preserved verbatim on the wire (no kebab→camelCase
-     transformation)."
-  [name description required-args optional-args handler & {:keys [title _meta]}]
+     transformation).
+
+   Optional keyword arguments (MCP 2025-11-25):
+   - :icons - vector of icon maps for display in user interfaces. Each map
+     has :src (required), and optionally :mime-type, :sizes, :theme."
+  [name description required-args optional-args handler & {:keys [title _meta icons]}]
   (-> (map-of name description required-args optional-args handler)
-      (?assoc :title title :_meta _meta)))
+      (?assoc :title title :_meta _meta :icons icons)))
 
 (defn str-schema
   "Creates a string JSON schema.
@@ -470,7 +521,7 @@
    - input-schema: object JSON schema describing the tool's input parameters
    - handler: tool handler function (fn [exchange params] ...)
 
-   Optional keyword arguments (MCP 2025-06-18):
+    Optional keyword arguments (MCP 2025-06-18):
    - :title - human-readable display name; clients SHOULD prefer it over name
      when present
    - :output-schema - object JSON Schema describing the structure of
@@ -480,6 +531,10 @@
    - :_meta - map of arbitrary metadata to attach to this tool. Keys
      under :_meta are preserved verbatim on the wire (no kebab→camelCase
      transformation).
+
+   Optional keyword arguments (MCP 2025-11-25):
+   - :icons - vector of icon maps for display in user interfaces. Each map
+     has :src (required), and optionally :mime-type, :sizes, :theme.
 
    JSON Schema supports the following types and constraints:
 
@@ -518,8 +573,9 @@
    - required: Specify required properties
    - additionalProperties: Control extra properties
    - patternProperties: Properties matching patterns"
-  [name description input-schema handler & {:keys [title output-schema _meta]}]
+  [name description input-schema handler & {:keys [title output-schema _meta icons]}]
   (?assoc (map-of name description input-schema handler)
           :title title
           :output-schema output-schema
-          :_meta _meta))
+          :_meta _meta
+          :icons icons))

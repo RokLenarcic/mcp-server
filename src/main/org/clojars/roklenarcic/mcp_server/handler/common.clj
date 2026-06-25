@@ -278,7 +278,7 @@
                   progress-callback)))
 
 (defn do-elicitation
-  "Requests structured input from the user via the client (MCP elicitation/create).
+  "Requests structured input from the user via the client (MCP elicitation/create, form mode).
 
    Parameters:
    - rpc-session: the session atom
@@ -293,6 +293,27 @@
                 "elicitation/create"
                 {:message message
                  :requestedSchema json-schema}
+                progress-callback))
+
+(defn do-elicitation-url
+  "Requests the client to open a URL for out-of-band interaction (MCP 2025-11-25 URL mode elicitation).
+
+   Parameters:
+   - rpc-session: the session atom
+   - message: human-readable message explaining why the interaction is needed
+   - url: the URL that the user should navigate to
+   - elicitation-id: a unique identifier for the elicitation
+   - progress-callback: optional progress callback (or nil)
+
+   Returns a CompletableFuture containing the elicitation result."
+  [rpc-session message url elicitation-id progress-callback]
+  (log/trace "Requesting URL-mode elicitation from client - url:" url)
+  (send-request rpc-session
+                "elicitation/create"
+                {:mode "url"
+                 :message message
+                 :url url
+                 :elicitationId elicitation-id}
                 progress-callback))
 
 (defn change-watcher
@@ -351,6 +372,12 @@
       (elicitation [this message json-schema progress-callback]
         (when (-> @rpc-session ::mcp/client-capabilities :elicitation)
           (do-elicitation rpc-session message json-schema progress-callback)))
+      (elicitation-url [this message url elicitation-id]
+        (when (-> @rpc-session ::mcp/client-capabilities :elicitation :url)
+          (do-elicitation-url rpc-session message url elicitation-id nil)))
+      (elicitation-url [this message url elicitation-id progress-callback]
+        (when (-> @rpc-session ::mcp/client-capabilities :elicitation :url)
+          (do-elicitation-url rpc-session message url elicitation-id progress-callback)))
       (report-progress [this msg]
         (let [progress-token (get-in params [:_meta :progressToken])]
           (when progress-token (notify-progress rpc-session progress-token msg))

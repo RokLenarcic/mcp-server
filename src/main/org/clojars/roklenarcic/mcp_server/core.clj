@@ -38,13 +38,24 @@
      
      sampling-request should be created with the sampling-request function.")
   (^CompletableFuture elicitation [this message json-schema] [this message json-schema progress-callback]
-    "Requests structured input from the user via the client (MCP elicitation/create).
-     Returns CompletableFuture with result, or nil if client doesn't support elicitation.
+    "Requests structured input from the user via the client (MCP elicitation/create, form mode).
+     Returns CompletableFuture with result, or nil if client doesn't support form-mode elicitation.
 
      Parameters:
      - message: human-readable prompt presented to the user
      - json-schema: JSON Schema (a map) describing the expected response shape;
        MCP restricts this to a flat object schema with primitive properties
+
+     If progress-callback is supplied, it will be called when client reports progress.")
+  (^CompletableFuture elicitation-url [this message url elicitation-id]
+                                      [this message url elicitation-id progress-callback]
+    "Requests the client to open a URL for out-of-band interaction (MCP 2025-11-25 URL mode elicitation).
+     Returns CompletableFuture with result, or nil if client doesn't support URL-mode elicitation.
+
+     Parameters:
+     - message: human-readable message explaining why the interaction is needed
+     - url: the URL that the user should navigate to
+     - elicitation-id: a unique identifier for the elicitation
 
      If progress-callback is supplied, it will be called when client reports progress.")
   (report-progress [this msg]
@@ -137,10 +148,14 @@
    - :_meta - map of arbitrary metadata to attach to this resource. Keys
      under :_meta are preserved verbatim on the wire (no kebab→camelCase
      transformation); use this to attach reverse-DNS or otherwise
-     custom-formatted identifiers."
-  [uri name description mime-type annotations & {:keys [title _meta]}]
+     custom-formatted identifiers.
+
+   Optional keyword arguments (MCP 2025-11-25):
+   - :icons - vector of icon maps for display in user interfaces. Each map
+     has :src (required), and optionally :mime-type, :sizes, :theme."
+  [uri name description mime-type annotations & {:keys [title _meta icons]}]
   (-> (map-of uri name description mime-type annotations)
-      (?assoc :title title :_meta _meta)))
+      (?assoc :title title :_meta _meta :icons icons)))
 
 (defn audio-content
   "Create audio content for Tools and Prompts.

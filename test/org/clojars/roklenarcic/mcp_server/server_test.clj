@@ -6,10 +6,12 @@
             [org.clojars.roklenarcic.mcp-server.server :as server]
             [org.clojars.roklenarcic.mcp-server :as-alias mcp]
             [org.clojars.roklenarcic.mcp-server.resource.lookup :as lookup]
+            [org.clojars.roklenarcic.mcp-server.json.cheshire :as cheshire]
+            [org.clojars.roklenarcic.mcp-server.server.streams :as streams]
             [org.clojars.roklenarcic.mcp-server.test-inputs :as test-in]
             [matcher-combinators.test]
             [matcher-combinators.matchers :as m])
-  (:import (java.io ByteArrayInputStream)
+  (:import (java.io ByteArrayInputStream PipedInputStream PipedOutputStream)
            (java.util.concurrent CompletableFuture)))
 
 ;; Helper function to read multiple responses
@@ -100,7 +102,7 @@
                         :clientInfo {:name "Test Client" :version "1.0.0"}})
     ;; Read initialize response
     (is (match? {"error" {"code" -32600
-                          "data" #"Invalid protocol version 2024-11-06, supported version #\{\"2025-06-18\"\}"
+                          "data" #"Invalid protocol version 2024-11-06, supported version"
                           "message" "Invalid Request"}
                  "id" int?
                  "jsonrpc" "2.0"}
@@ -1304,3 +1306,188 @@
         (is (= 1 (count responses)))
         (is (match? {"jsonrpc" "2.0" "result" {} "id" int?}
                     (first responses)))))))
+
+;; =============================================================================
+;; MCP 2025-11-25 Protocol Tests
+;; =============================================================================
+
+(deftest protocol-version-2025-06-18-still-accepted-test
+  (testing "Server still accepts 2025-06-18 for backwards compatibility"
+    (let [{:keys [stdin stdout]} (test-in/create-server)]
+      (test-in/print-req stdin "initialize"
+                         {:protocolVersion "2025-06-18"
+                          :capabilities {}
+                          :clientInfo {:name "Test Client" :version "1.0.0"}})
+      (.close stdin)
+      (let [response (json/read-json (first (line-seq stdout)))]
+        (is (= "2025-06-18" (get-in response ["result" "protocolVersion"])))))))
+
+(deftest server-info-ext-test
+  (testing "Extended server-info metadata appears in initialize response"
+    (let [pipe-in (PipedInputStream.)
+          os (PipedOutputStream. pipe-in)
+          os2 (PipedOutputStream.)
+          out (PipedInputStream. os2)
+          session (server/make-session
+                    (server/server-info-ext
+                      (server/server-info "MyServer" "2.0.0" "Help text" true)
+                      :title "My Cool Server"
+                      :description "A server for testing"
+                      :icons [(server/icon "https://example.com/icon.png"
+                                           :mime-type "image/png"
+                                           :sizes ["48x48"])]
+                      :website-url "https://example.com")
+                    (cheshire/serde {})
+                    {})
+          stdin (clojure.java.io/writer os)
+          ^java.io.BufferedReader stdout (clojure.java.io/reader out)]
+      (future (try (streams/run session pipe-in os2 {})
+                   (catch Exception _)
+                   (finally (.close os2))))
+      (test-in/print-req stdin "initialize"
+                         {:protocolVersion init/server-protocol-version
+                          :capabilities {}
+                          :clientInfo {:name "Test Client" :version "1.0.0"}})
+      (.close stdin)
+      (let [response (json/read-json (.readLine stdout))]
+        (is (= "2025-11-25" (get-in response ["result" "protocolVersion"])))
+        (is (= "MyServer" (get-in response ["result" "serverInfo" "name"])))
+        (is (= "2.0.0" (get-in response ["result" "serverInfo" "version"])))
+        (is (= "My Cool Server" (get-in response ["result" "serverInfo" "title"])))
+        (is (= "A server for testing" (get-in response ["result" "serverInfo" "description"])))
+        (is (= [{"src" "https://example.com/icon.png"
+                 "mimeType" "image/png"
+                 "sizes" ["48x48"]}]
+               (get-in response ["result" "serverInfo" "icons"])))
+        (is (= "https://example.com" (get-in response ["result" "serverInfo" "websiteUrl"])))))))
+
+(deftest icons-on-tools-test
+  (testing "Icons appear in tools/list response"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          tool (server/tool "my-tool" "A tool"
+                            (server/obj-schema "params" {} [])
+                            (fn [_ _] "ok")
+                            :icons [(server/icon "https://example.com/tool.png"
+                                                 :mime-type "image/png"
+                                                 :sizes ["32x32"])])]
+      (server/add-tool server tool)
+      (test-in/initialize s)
+      (test-in/print-req stdin "tools/list" {})
+      (.close stdin)
+      (is (match? {"result" {"tools" [{"name" "my-tool"
+                                        "icons" [{"src" "https://example.com/tool.png"
+                                                  "mimeType" "image/png"
+                                                  "sizes" ["32x32"]}]}]}}
+                  (json/read-json (first (line-seq stdout))))))))
+
+(deftest icons-on-prompts-test
+  (testing "Icons appear in prompts/list response"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          p (server/prompt "my-prompt" "A prompt" {} {}
+                           (fn [_ _] (c/prompt-resp "desc" [(c/text-content "hello")]))
+                           :icons [(server/icon "https://example.com/prompt.svg"
+                                                :mime-type "image/svg+xml"
+                                                :sizes ["any"])])]
+      (server/add-prompt server p)
+      (test-in/initialize s)
+      (test-in/print-req stdin "prompts/list" {})
+      (.close stdin)
+      (is (match? {"result" {"prompts" [{"name" "my-prompt"
+                                          "icons" [{"src" "https://example.com/prompt.svg"
+                                                    "mimeType" "image/svg+xml"
+                                                    "sizes" ["any"]}]}]}}
+                  (json/read-json (first (line-seq stdout))))))))
+
+(deftest icons-on-resource-templates-test
+  (testing "Icons appear in resources/templates/list response"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)]
+      (server/set-resources-handler server (org.clojars.roklenarcic.mcp-server.resource.lookup/lookup-map true))
+      (server/add-resource-template server "file:///{path}" "Files" "Project files" "application/octet-stream"
+                                    nil :icons [(server/icon "https://example.com/folder.png"
+                                                            :mime-type "image/png"
+                                                            :sizes ["48x48"])])
+      (test-in/initialize s)
+      (test-in/print-req stdin "resources/templates/list" {})
+      (.close stdin)
+      (is (match? {"result" {"resourceTemplates"
+                              [{"name" "Files"
+                                "icons" [{"src" "https://example.com/folder.png"
+                                          "mimeType" "image/png"
+                                          "sizes" ["48x48"]}]}]}}
+                  (json/read-json (first (line-seq stdout))))))))
+
+(deftest elicitation-url-mode-test
+  (testing "URL-mode elicitation sends correct params and returns client response"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          tool (server/tool "ConnectAPI"
+                            "Connect to external API"
+                            (server/obj-schema "D" {} [])
+                            (fn [exchange _]
+                              (-> (c/elicitation-url exchange
+                                                    "Please authorize access"
+                                                    "https://auth.example.com/connect"
+                                                    "elicit-123")
+                                  (.thenApply (fn [resp]
+                                               (str "Got " (:action resp)))))))]
+      (server/add-tool server tool)
+      ;; Initialize with URL-mode elicitation support
+      (test-in/print-req stdin "initialize"
+                         {:protocolVersion init/server-protocol-version
+                          :capabilities {:roots {} :sampling {} :elicitation {:form {} :url {}}}
+                          :clientInfo {:name "Test Client" :version "1.0.0"}})
+      (.readLine stdout)
+      (test-in/print-notif stdin "notifications/initialized" nil)
+      (loop [i 0]
+        (when (and (not (::mcp/initialized? @server))
+                   (<= i 100))
+          (Thread/sleep 20)
+          (recur (inc i))))
+
+      (test-in/print-req stdin "tools/call" {:name "ConnectAPI" :arguments {}})
+      ;; Server should send elicitation/create with URL mode params
+      (is (match? {"id" int?
+                   "jsonrpc" "2.0"
+                   "method" "elicitation/create"
+                   "params" {"mode" "url"
+                             "message" "Please authorize access"
+                             "url" "https://auth.example.com/connect"
+                             "elicitationId" "elicit-123"}}
+                  (test-in/get-req-and-resp s {:action "accept"})))
+      (.close stdin)
+      (is (match? {"jsonrpc" "2.0"
+                   "result" {"content" [{"text" "Got accept" "type" "text"}]
+                             "isError" false}
+                   "id" int?}
+                  (json/read-json (first (line-seq stdout)))))))
+
+  (testing "URL-mode elicitation returns nil when client doesn't support URL mode"
+    (let [{:keys [stdin stdout server] :as s} (test-in/create-server)
+          tool-result (atom ::unset)
+          tool (server/tool "ConnectAPI"
+                            "Connect to external API"
+                            (server/obj-schema "D" {} [])
+                            (fn [exchange _]
+                              (reset! tool-result
+                                      (c/elicitation-url exchange "msg" "https://example.com" "id-1"))
+                              "done"))]
+      (server/add-tool server tool)
+      ;; Initialize with only form-mode elicitation (no :url sub-key)
+      (test-in/print-req stdin "initialize"
+                         {:protocolVersion init/server-protocol-version
+                          :capabilities {:roots {} :sampling {} :elicitation {:form {}}}
+                          :clientInfo {:name "Test Client" :version "1.0.0"}})
+      (.readLine stdout)
+      (test-in/print-notif stdin "notifications/initialized" nil)
+      (loop [i 0]
+        (when (and (not (::mcp/initialized? @server))
+                   (<= i 100))
+          (Thread/sleep 20)
+          (recur (inc i))))
+      (test-in/print-req stdin "tools/call" {:name "ConnectAPI" :arguments {}})
+      (.close stdin)
+      (is (match? {"jsonrpc" "2.0"
+                   "result" {"content" [{"text" "done" "type" "text"}]
+                             "isError" false}
+                   "id" int?}
+                  (json/read-json (first (line-seq stdout)))))
+      (is (nil? @tool-result)))))
